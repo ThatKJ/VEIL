@@ -4,6 +4,8 @@ Everything here is generic Indian-language structure (labels, honorifics, kinshi
 markers, clinical vocabulary, a transliteration table). No practice-data patient
 names are stored: patient names are harvested from each input at run time.
 """
+from __future__ import annotations
+
 from functools import lru_cache
 import re
 import unicodedata

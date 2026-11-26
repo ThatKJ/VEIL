@@ -1401,6 +1401,11 @@ class Rewriter:
             return True
         if _SAFE_SURROGATE_KEY.fullmatch(k):
             return False
+        sp_clean = spaced.strip()
+        if (not self.schema_key(k) and NAME_VALUE.fullmatch(sp_clean) and len(sp_clean.split()) >= 2
+                and _name_ok(sp_clean.split())
+                and not any(w.lower() in (_SAFE_MAP_KEY_TOK | COMMON_WORDS | L.CLINICAL_WORDS | L.MED_ACRONYMS) for w in sp_clean.split())):
+            return True
         if norm_k in self.H.ids or sw.rx_ids.search(k) or sw.rx_digits.search(k):
             return True
         if (RX_IDTOK.fullmatch(k) and id_digits_ok(k)) or len(digs_k) >= 6:

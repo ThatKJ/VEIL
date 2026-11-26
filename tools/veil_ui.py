@@ -87,7 +87,7 @@ HISTORICAL_BENCHMARKS = {
         {"workload": "1.25M mixed (6,252 files)", "records": "943,750", "wall_s": 682.755, "peak_rss_mb": 2928.4, "throughput": "1,382 rows/s"},
     ],
     "scale": {"records": "1,000,000 x 1,000,000", "seconds": 128.927, "peak_rss_mb": 3176.2},
-    "checks": {"unit_tests": "39/39 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
+    "checks": {"unit_tests": "41/41 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
 }
 
 

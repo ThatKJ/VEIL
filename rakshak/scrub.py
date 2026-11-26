@@ -220,7 +220,8 @@ class Sweeper:
             return re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(items, lambda n: sep.join(re.escape(p) for p in n.split()))})(?![A-Za-z])")
 
         def _compile_dev_full(items):
-            return re.compile(rf"(?<![{DEVA}])(?:{alt(items, lambda n: r'\s+'.join(re.escape(p) for p in n.split()))})(?![{DEVA}])")
+            ws = r"\s+"
+            return re.compile(rf"(?<![{DEVA}])(?:{alt(items, lambda n: ws.join(re.escape(p) for p in n.split()))})(?![{DEVA}])")
 
         def _compile_place(items):
             return re.compile(rf"(?i)(?<![A-Za-z{DEVA}])(?:{alt(items, lambda n: sep.join(re.escape(x) for x in n.split()))})(?![A-Za-z{DEVA}])")
@@ -249,8 +250,9 @@ class Sweeper:
 
         ids = sorted(H.ids, key=len, reverse=True)
         if len(ids) <= 64:
+            id_sep = r"[\s/\-_.]*"
             self.rx_ids = re.compile(
-                rf"(?i)(?<![A-Za-z0-9])(?:{alt(ids, lambda i: r'[\s/\-_.]*'.join(re.escape(c) for c in i))})(?![A-Za-z0-9])")
+                rf"(?i)(?<![A-Za-z0-9])(?:{alt(ids, lambda i: id_sep.join(re.escape(c) for c in i))})(?![A-Za-z0-9])")
         else:
             self.rx_ids = _IdIndexSub(ids)
 
