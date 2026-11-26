@@ -103,6 +103,33 @@ def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
     return inits[0] == ym[0][0] and (len(inits) == 1 or len(ym) == 1 or all(any(t[0] == i for t in ym) for i in inits))
 
 
+def _near(u: str, v: str) -> bool:
+    if u.startswith(v) or v.startswith(u):
+        return min(len(u), len(v)) >= 2
+    if abs(len(u) - len(v)) > 1:
+        return False
+    if len(u) == len(v):
+        return sum(p != q for p, q in zip(u, v)) <= 1
+    s, t = (u, v) if len(u) < len(v) else (v, u)
+    return any(t[:i] + t[i + 1:] == s for i in range(len(t)))
+
+
+def _given_conflict(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
+    """Two full names sharing a family/house name but with outright different remaining given names
+    ('Kizhakkethil Dheerubi' vs 'Kizhakkethil Bedham'): relatives, not one person."""
+    ux = [t for t in x if len(t) >= 2 and t not in y]
+    uy = [t for t in y if len(t) >= 2 and t not in x]
+    if ux and uy and not any(_near(u, v) for u in ux for v in uy):
+        return True
+    # initials-first names ('K. P. Dapee'): the first initial abbreviates the family/house name,
+    # so it must match one of the other name's remaining full tokens
+    for a, ub in ((x, uy), (y, ux)):
+        ia = [t for t in a[:-1] if len(t) == 1]
+        if len(ia) >= 2 and ub and not any(u[0] == ia[0] for u in ub):
+            return True
+    return False
+
+
 def _name_compatible(a: Cluster, b: Cluster) -> bool:
     if not a.names or not b.names:
         return True
@@ -110,6 +137,8 @@ def _name_compatible(a: Cluster, b: Cluster) -> bool:
         for y in b.names:
             mx = {t for t in x if len(t) >= 2}
             my = {t for t in y if len(t) >= 2}
+            if _given_conflict(x, y) and os.environ.get("RAKSHAK_P_GIVEN_VETO", "on") != "off":
+                continue
             if (mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx))) or _initial_match(x, y) or _initial_match(y, x):
                 return True
             if x[0] == y[0] and ((len(x) == 1 or len(y) == 1) or (len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1])):
