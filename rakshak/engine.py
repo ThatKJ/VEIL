@@ -266,7 +266,7 @@ RX_PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Za-z0-9])")
 RX_MASKED_AADHAAR = re.compile(r"(?i)(?<![\w])[x*•]{4}[\s\-]?[x*•]{4}[\s\-]?\d{4}(?!\d)")
 RX_DIGITRUN = re.compile(r"(?<![\w/:])(?<!\d\.)(\+?[0-9०-९][0-9०-९\s\-]{6,}[0-9०-९])(?![\w/:]|\.\d)")
 # Hospital / insurance style IDs: letters + >=4 digits, with optional / - separators
-RX_IDTOK = re.compile(r"(?<![\w/\-])(?=[\w/\-]*\d{3})(?=[\w/\-]*[A-Za-z])[A-Za-z]{1,8}[A-Za-z0-9]*(?:[/\-][A-Za-z0-9]+)+(?![\w/\-])"
+RX_IDTOK = re.compile(r"(?<![\w/\-:#])(?=[\w/\-:#]*\d{3})(?=[\w/\-:#]*[A-Za-z])[A-Za-z]{1,8}[A-Za-z0-9]*(?:[/\-:#][A-Za-z0-9]+)+(?![\w/\-:#])"
                       r"|(?<![\w/\-])[A-Za-z]{2,8}\d{5,}(?![\w/\-])")
 
 

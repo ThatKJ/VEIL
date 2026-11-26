@@ -77,7 +77,7 @@ RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
 RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|जिला|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
-RX_HOUSE = re.compile(rf"(?i)(?:\b(?:H\.?\s?No\.?|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
+RX_HOUSE = re.compile(rf"(?i)(?:(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
 RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
 RX_WARD_ADDR = re.compile(r"(?i)(?<=,\s)Ward\s*(?:No\.?)?\s*\d+\b(?!\s*[(/])|\bWard\s*(?:No\.?)?\s*\d+(?=\s*,)")
 RX_WARDNUM = re.compile(r"(?i)\bWard\s*(?:No\.?)?\s*\d+(?!\s*\()")
@@ -107,7 +107,8 @@ def _name_ok(toks: list[str]) -> bool:
 _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
-                         rf"handed\s+over\s+to|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
+                         rf"handed\s+over\s+to|(?:complaint|shikayat|request|application|letter|statement|feedback|query)\s+(?:by|from)|"
+                         rf"filed\s+by|submitted\s+by|raised\s+by|lodged\s+by|written\s+by|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
 RX_CONSENT = re.compile(rf"(?i)\b(?:I|मैं)\s*,?\s+({NAME_SEQ})\s*,?\s+(?:S/O|D/O|W/O|consent|agree|hereby|authori[sz]e|declare|give|am|aged|resident)\b")
 RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}})\s+(?:visited|came|called|met|brought|accompanied|"
                           rf"signed|left|arrived|requested|collected|took|stayed|attended|enquired)\b")
@@ -116,7 +117,8 @@ RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.
                          r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Record\s*No|File\s*No|"
                          r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-]{2,})")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
-                          rf"mother|brother|sister|guardian|neighbour|friend)\b", re.I)
+                          rf"mother|brother|sister|guardian|neighbour|friend|raahgir|rahgir|padosi|padosan|rishtedaar|rishtedar|mitra|dost|saathi|"
+                          rf"gawah|beta|beti|bhai|behen|bahan|pati|patni|maa|pita|chacha|chachi|mama|mami|bua|nana|nani|dada|dadi)\b", re.I)
 
 
 def generalize_address(value: str, band_pin: bool = True) -> str:

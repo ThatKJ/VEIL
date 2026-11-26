@@ -21,7 +21,7 @@ from .linker import Linker
 from .scrub import NAME_VALUE
 from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_KIN, RX_LABEL, RX_VILL, Ctx, Sweeper, _name_ok,
                     generalize_address, scrub_text)
-from .engine import clean_name_seq, DOB_RX
+from .engine import clean_name_seq, DOB_RX, COMMON_WORDS
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
                ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".hl7", ".rtf", ".odt", ".ppt", ".pptx",
@@ -502,6 +502,9 @@ def pass1(job: FileJob, H: Harvest):
     except (ValueError, RecursionError, csv.Error, UnicodeError, KeyError, TypeError):
         job.status, job.reason = "quarantined", "malformed_content"
         job.recs = []
+    except Exception:  # noqa: BLE001 - fail safe: never crash the release on one file
+        job.status, job.reason = "quarantined", "processing_error"
+        job.recs = []
 
 
 # ================================================================ pass 2 (transform)
@@ -537,8 +540,10 @@ class Rewriter:
             st["identifiers"] += 1
             m = re.match(r"(?i)\s*(S/O|D/O|W/O|H/O|C/O|S\.O\.|D\.O\.|W\.O\.)\.?\s*", s)
             return (m.group(1) + " " if m else "") + "[RELATIVE]"
-        if kind in ("STRUCT", "RELATION", "DOCTOR"):
+        if kind in ("STRUCT", "RELATION"):
             return s
+        if kind == "DOCTOR":
+            return s if re.match(r"(?i)\s*(?:dr\.?|डॉ)", s) or not re.search(r"\d{4}", s) else scrub_text(s, ctx, self.sw)
         if kind == "MRN":
             st["identifiers"] += 1
             return ctx.psn or "[ID]"
@@ -570,7 +575,7 @@ class Rewriter:
             st["identifiers"] += 1
             return generalize_address(s)
         if kind in ("DISTRICT", "TEHSIL", "GENDER"):
-            return s
+            return scrub_text(s, ctx, self.sw) if re.search(r"\d{3}|[A-Z][a-z]+\s+[A-Z][a-z]+", s) else s
         if kind == "NAME_SHAPE":
             st["identifiers"] += 1
             return "[NAME]"
@@ -671,6 +676,12 @@ def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
             flagged = True
             continue
         keep.append(p)
+    caps = [p for p in parts if p and not re.fullmatch(r"[_\-\s.()]+", p)]
+    for a, b in zip(caps, caps[1:]):
+        if (re.fullmatch(r"[A-Z][a-z]{2,}", a) and re.fullmatch(r"[A-Z][a-z]{2,}", b)
+                and not ({a.lower(), b.lower()} & (COMMON_FILE_WORDS | COMMON_WORDS | L.CLINICAL_WORDS))):
+            flagged = True
+            parts = [p for p in parts if p not in (a, b)]
     if not flagged:
         # whole-stem checks (full names spanning separators)
         if sw.rx_lat_full.search(stem) or sw.rx_dev_full.search(stem) or sw.rx_ids.search(stem):
@@ -800,7 +811,10 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if j.status != "sanitized":
             continue
         comps = j.rel.split("/")
-        new = [scrub_component(c, H, sw, j.rel + "#" + str(i)) for i, c in enumerate(comps)]
+        try:
+            new = [scrub_component(c, H, sw, j.rel + "#" + str(i)) for i, c in enumerate(comps)]
+        except Exception:  # noqa: BLE001
+            new = [f"file_{opaque('fname', j.rel, 8)}{os.path.splitext(j.rel)[1]}"]
         o = "/".join(new)
         while o.lower() in used:
             stem, ext = os.path.splitext(o)
@@ -833,8 +847,12 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                     r = j.recs[i]
                     c = ctx_for(r, j)
                     new_row = []
+                    ragged = len(row) != len(j.colkinds)
                     for ci, v in enumerate(row):
                         k = j.colkinds[ci] if ci < len(j.colkinds) else None
+                        if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE"):
+                            new_row.append(scrub_text(v, c, sw))
+                            continue
                         if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
                             st["identifiers"] += 1
                             new_row.append("")
@@ -850,7 +868,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                     result = f"Patient: {r.pid}\n" + result
             result, hits = verify_text(result, crit)
             st["verify_hits"] += hits
-        except (RecursionError, ValueError, TypeError) as exc:
+        except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
             j.status, j.reason = "quarantined", "processing_error"
             continue
         dest = san / j.out_rel
