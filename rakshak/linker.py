@@ -10,18 +10,34 @@ evidence, so two individually plausible links cannot chain unrelated people toge
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
 from . import lexicon as L
 
 
+def _strip_fused_suffix(tl: str) -> str:
+    if tl.endswith("bhai") and len(tl) >= 7:
+        return tl[:-4]
+    if tl.endswith("ben") and len(tl) >= 6:
+        return tl[:-3]
+    return tl
+
+
 def name_keys(tokens: list[str]) -> tuple[str, ...]:
     ks = []
     for t in tokens:
+        if re.fullmatch(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", t):
+            for ch in re.findall(r"[A-Za-z]", t):
+                ks.append(ch.lower())
+            continue
         tl = t.strip(".").lower()
         if tl in L.GENERIC_NAME_TOKENS:
             continue
-        s = L.skel(t)
+        if len(tl) == 1 and tl.isalpha():
+            ks.append(tl)
+            continue
+        s = L.skel(_strip_fused_suffix(tl))
         if len(s) >= 2:
             ks.append(s)
     return tuple(ks)
@@ -53,12 +69,28 @@ class Cluster:
         self.ids |= o.ids
 
 
+def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
+    """Match abbreviated initials like ('j','h','vhr') with ('jbr','hkt','vhr') or ('jbr','vhr')."""
+    if len(x) < 2 or len(y) < 2:
+        return False
+    inits = [t for t in x[:-1] if len(t) == 1]
+    if not inits or x[-1] != y[-1] or len(x[-1]) < 2:
+        return False
+    ym = [t for t in y[:-1] if len(t) >= 2]
+    if not ym:
+        return False
+    return inits[0] == ym[0][0] and (len(inits) == 1 or len(ym) == 1 or all(any(t[0] == i for t in ym) for i in inits))
+
+
 def _name_compatible(a: Cluster, b: Cluster) -> bool:
     if not a.names or not b.names:
         return True
     for x in a.names:
         for y in b.names:
-            if set(x) & set(y) and (x[0] == y[0] or x[0] in y or y[0] in x):
+            mx = {t for t in x if len(t) >= 2}
+            my = {t for t in y if len(t) >= 2}
+            if mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)
+                            or _initial_match(x, y) or _initial_match(y, x)):
                 return True
     return False
 
@@ -136,7 +168,8 @@ class Linker:
             for r in roots:
                 for nk in self.cl[r].names:
                     for t in set(nk):
-                        index[t].append(r)
+                        if len(t) >= 2:
+                            index[t].append(r)
             for r in roots:
                 if self.find(r) != r:
                     continue
@@ -144,7 +177,8 @@ class Linker:
                 cands = set()
                 for nk in c.names:
                     for t in set(nk):
-                        cands.update(index.get(t, []))
+                        if len(t) >= 2:
+                            cands.update(index.get(t, []))
                 good = []
                 for o in sorted(cands):
                     o = self.find(o)

@@ -63,10 +63,21 @@ def norm(s: str) -> str:
 
 
 # ============================================================== I/O
+def _fix_mojibake(text: str) -> str:
+    if any(sig in text for sig in ("à¤", "à¥", "à¦", "à§", "à¨", "à©", "àª", "à«")):
+        try:
+            fixed = text.encode("latin-1").decode("utf-8")
+            if any("\u0900" <= c <= "\u0aff" for c in fixed):
+                return fixed
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return text
+
+
 def decode(raw: bytes) -> str | None:
     if raw.startswith(b"\xef\xbb\xbf"):
         try:
-            return raw[3:].decode("utf-8")
+            return _fix_mojibake(raw[3:].decode("utf-8"))
         except UnicodeDecodeError:
             return None
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -80,14 +91,14 @@ def decode(raw: bytes) -> str | None:
         except UnicodeDecodeError:
             return None
     try:
-        return raw.decode("utf-8")
+        return _fix_mojibake(raw.decode("utf-8"))
     except UnicodeDecodeError:
         pass
     try:
         t = raw.decode("cp1252")
     except UnicodeDecodeError:
         return None
-    return t
+    return _fix_mojibake(t)
 
 
 def looks_binary(text: str) -> bool:
@@ -131,7 +142,7 @@ def sniff_delim(text: str, ext: str) -> str:
         d = _delimited(text)
         if d:
             return d
-    first = text.split("\n", 1)[0]
+    first = text.replace("\r\n", "\n").replace("\r", "\n").split("\n", 1)[0]
     cands = {"\t": first.count("\t"), ",": first.count(","), ";": first.count(";"), "|": first.count("|")}
     if ext == ".tsv" and cands["\t"]:
         return "\t"
@@ -139,7 +150,11 @@ def sniff_delim(text: str, ext: str) -> str:
     return best if cands[best] else ("\t" if ext == ".tsv" else ",")
 
 
-_INDIC_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+_INDIC_DIGITS = str.maketrans(
+    "०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯",
+    "0123456789" * 4,
+)
+INDIC_DIG = "0-9०-९০-৯੦-੯૦-૯"
 
 # ============================================================== dates
 _MON = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
@@ -152,8 +167,9 @@ _HI_NAMES = {1: "जनवरी", 2: "फ़रवरी", 3: "मार्च"
 RX_HID = re.compile(r"(?<![\d०-९])([\d०-९]{1,2})\s+(" + "|".join(sorted(_HI_MON, key=len, reverse=True)) + r")\s*,?\s+((?:19|20|१९|२०)[\d०-९]{2})(?![\d०-९])")
 _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
              "November", "December"]
-RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2})(?![\d/.\-])")
+RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2}|\d{2})(?![\d/.\-])")
 RX_ISO = re.compile(r"(?<![\d/.\-])((?:19|20)\d{2})([-/.])(\d{2})\2(\d{2})(?![\d/.\-])")
+RX_ISO8 = re.compile(r"(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")
 RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
                       r"(,?[\s\-/.]+)((?:19|20)?\d{2})\b")
 RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)[\s\-]+(\d{1,2})(st|nd|rd|th)?,?[\s\-]+((?:19|20)\d{2})\b")
@@ -187,21 +203,23 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
     def dmy(m):
         a, sep, b, y = m.group(1), m.group(2), m.group(3), m.group(4)
         ia, ib = int(a), int(b)
+        iy = int(y) if len(y) == 4 else (2000 + int(y) if int(y) <= 30 else 1900 + int(y))
         o = order
         if ia > 12 and ib <= 12:
             o = "dmy"
         elif ib > 12 and ia <= 12:
             o = "mdy"
-        d = _mk(int(y), ib, ia) if o == "dmy" else _mk(int(y), ia, ib)
+        d = _mk(iy, ib, ia) if o == "dmy" else _mk(iy, ia, ib)
         if not d:
             return m.group(0)
         n = d + delta
         first, second = (n.day, n.month) if o == "dmy" else (n.month, n.day)
         f1 = f"{first:02d}" if len(a) == 2 else str(first)
         f2 = f"{second:02d}" if len(b) == 2 else str(second)
+        ys = str(n.year) if len(y) == 4 else f"{n.year % 100:02d}"
         if counter is not None:
             counter.append(1)
-        return w(f"{f1}{sep}{f2}{sep}{n.year}")
+        return w(f"{f1}{sep}{f2}{sep}{ys}")
 
     def iso(m):
         d = _mk(int(m.group(1)), int(m.group(3)), int(m.group(4)))
@@ -212,6 +230,15 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         if counter is not None:
             counter.append(1)
         return w(f"{n.year}{sep}{n.month:02d}{sep}{n.day:02d}")
+
+    def iso8(m):
+        d = _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if not d:
+            return m.group(0)
+        n = d + delta
+        if counter is not None:
+            counter.append(1)
+        return w(f"{n.year}{n.month:02d}{n.day:02d}")
 
     def textd(m):
         mon = _MON.get(m.group(4).lower()[:3])
@@ -254,6 +281,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
 
     text = RX_HID.sub(hid, text)
     text = RX_ISO.sub(iso, text)
+    text = RX_ISO8.sub(iso8, text)
     text = RX_DMY.sub(dmy, text)
     text = RX_TEXTD.sub(textd, text)
     text = RX_TEXTM.sub(textm, text)
@@ -269,9 +297,13 @@ def parse_date(s: str, order: str) -> dt.date | None:
     m = RX_ISO.search(s)
     if m:
         return _mk(int(m.group(1)), int(m.group(3)), int(m.group(4)))
+    m = RX_ISO8.search(s)
+    if m:
+        return _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     m = RX_DMY.search(s)
     if m:
-        a, b, y = int(m.group(1)), int(m.group(3)), int(m.group(4))
+        a, b, ys = int(m.group(1)), int(m.group(3)), m.group(4)
+        y = int(ys) if len(ys) == 4 else (2000 + int(ys) if int(ys) <= 30 else 1900 + int(ys))
         if a > 12:
             return _mk(y, b, a)
         if b > 12:
@@ -279,10 +311,15 @@ def parse_date(s: str, order: str) -> dt.date | None:
         return _mk(y, b, a) if order == "dmy" else _mk(y, a, b)
     m = RX_TEXTD.search(s)
     if m:
-        return _mk(int(m.group(7)), _MON[m.group(4).lower()[:3]], int(m.group(1)))
+        yy = m.group(7)
+        y = int(yy) + (2000 if len(yy) == 2 else 0)
+        return _mk(y, _MON[m.group(4).lower()[:3]], int(m.group(1)))
+    m = RX_TEXTM.search(s)
+    if m:
+        return _mk(int(m.group(5)), _MON[m.group(1).lower()[:3]], int(m.group(3)))
     m = RX_HID.search(s)
     if m:
-        return _mk(int(m.group(3)), _HI_MON[m.group(2)], int(m.group(1)))
+        return _mk(int(m.group(3).translate(_INDIC_DIGITS)), _HI_MON[m.group(2)], int(m.group(1).translate(_INDIC_DIGITS)))
     return None
 
 
@@ -292,10 +329,11 @@ RX_PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Za-z0-9])")
 RX_DOTTED_AADHAAR = re.compile(r"(?<![\d.])\d{4}\.\d{4}\.\d{4}(?![\d.])")
 RX_DOTTED_PHONE = re.compile(r"(?<![\d.])(?:\+?91[\s.\-]?)?[6-9]\d{4}[.·]\d{5}(?![\d.])|(?<![\d.])[6-9]\d{2}[.·]\d{3}[.·]\d{4}(?![\d.])")
 RX_MASKED_AADHAAR = re.compile(r"(?i)(?<![\w])[x*•]{4}[\s\-]?[x*•]{4}[\s\-]?\d{4}(?!\d)")
-RX_DIGITRUN = re.compile(r"(?<![\w/:])(?<!\d\.)(\+?[0-9०-९][0-9०-९\s\-]{6,22}[0-9०-९])(?![\w/:]|\.\d)")
-# Hospital / insurance style IDs: letters + >=4 digits, with optional / - separators
+RX_DIGITRUN = re.compile(rf"(?<![\w/:])(?<!\d\.)((?:\(\+91\)\s*|\+?[{INDIC_DIG}])[{INDIC_DIG}\s\-()]{{6,24}}[{INDIC_DIG}])(?![\w/:]|\.\d)")
+# Hospital / insurance style IDs: letters + >=4 digits, with optional / - : # separators, or dotted XX.YY.NNNN
 RX_IDTOK = re.compile(r"(?<![\w/\-:#])(?=[\w/\-:#]{0,40}\d{3})(?=[\w/\-:#]{0,40}[A-Za-z])[A-Za-z]{1,8}[A-Za-z0-9]{0,16}(?:[/\-:#][A-Za-z0-9]{1,16}){1,6}(?![\w/\-:#])"
-                      r"|(?<![\w/\-])[A-Za-z]{2,8}\d{5,16}(?![\w/\-])")
+                      r"|(?<![\w/\-])[A-Za-z]{2,8}\d{5,16}(?![\w/\-])"
+                      r"|(?<![\w.])[A-Za-z]{2,6}\.\d{2,4}\.\d{3,8}(?![\w.])")
 
 
 def classify_digits(run: str) -> str | None:
@@ -338,14 +376,16 @@ CLIN_PROTECT = [
 ]
 RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|डॉ\.?|डा\.)\s*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:\s+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
 
-NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+)"
+NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"
 STOP_WORDS = {"age", "sex", "uhid", "ipd", "opd", "mobile", "address", "dob", "date", "ward", "bed", "dr", "dr.",
-              "consultant", "diagnosis", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र",
+              "consultant", "diagnosis", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र", "उमर", "उमिर",
               "लिंग", "पता", "ग्राम", "तारीख", "मोबाइल", "patient", "name", "hospital", "rx", "adv", "tab", "inj",
               "the", "and", "of", "on", "at", "in", "for", "with", "to", "is", "was", "no", "not", "nil", "na", "n/a",
               "phone", "tehsil", "distt", "district", "village", "pin", "reg", "attendant", "informed", "ka", "ki",
-              "ke", "ne", "को", "का", "की", "के", "है", "मरीज़", "मरीज", "he", "she", "his", "her", "patient's"}
+              "ke", "ne", "को", "का", "की", "के", "दा", "दे", "दी", "nu", "ni", "no", "है", "मरीज़", "मरीज", "he", "she", "his", "her", "patient's",
+              "umar", "umra", "umir", "jati", "sx", "sarnamu", "rihaish", "रिहाइश", "dardi", "nidan", "fariyad",
+              "tapas", "riport", "dava", "din", "dakhal", "raja", "vali", "dikri", "patni", "puttar", "mr", "naam", "नाम"}
 COMMON_WORDS = {"fever", "pain", "patient", "hospital", "medicine", "ward", "bed", "doctor", "discharge", "summary",
                 "admission", "history", "diagnosis", "treatment", "advice", "review", "tab", "inj", "cap", "syp",
                 "normal", "stable", "date", "time", "report", "lab", "test", "result", "blood", "urine", "sugar",
@@ -354,12 +394,17 @@ COMMON_WORDS = {"fever", "pain", "patient", "hospital", "medicine", "ward", "bed
                 "clinic", "health", "city", "public", "primary", "school", "mandir", "masjid", "near"}
 
 
+_HON_LEAD = re.compile(rf"^(?:{L.HONORIFIC_BEFORE})$", re.I)
+
+
 def clean_name_seq(seq: str) -> list[str]:
     toks = []
     for t in re.split(r"[ \t]+", seq.strip()):
         tl = t.strip(".,;:'’").lower()
         if not tl or tl in STOP_WORDS:
             break
+        if not toks and (_HON_LEAD.fullmatch(t.strip(",;:")) or _HON_LEAD.fullmatch(tl)):
+            continue
         toks.append(t.strip(",;:"))
     return toks
 
@@ -441,10 +486,10 @@ def gender_of(v) -> str | None:
 
 
 def age_of(v) -> int | None:
-    m = re.search(r"\d{1,3}", str(v))
+    m = re.search(r"\d{1,3}", str(v).translate(_INDIC_DIGITS))
     if m and 0 <= int(m.group(0)) <= 120:
         return int(m.group(0))
     return None
 
 
-DOB_RX = re.compile(L.DOB_LABEL.pattern + r"(\d{1,2}[/\-.]\d{1,2}[/\-.](?:19|20)\d{2}|(?:19|20)\d{2}-\d{2}-\d{2})")
+DOB_RX = re.compile(L.DOB_LABEL.pattern + r"([^\n]{4,36})")

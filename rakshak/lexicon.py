@@ -5,8 +5,35 @@ markers, clinical vocabulary, a transliteration table). No practice-data patient
 names are stored: patient names are harvested from each input at run time.
 """
 import re
+import unicodedata
 
-DEVA = "ऀ-ॿ"
+DEVA = "\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF"
+
+# Map Bengali (+0x80), Gurmukhi (+0x100), Gujarati (+0x180) codepoints to Devanagari
+# for unified transliteration and cross-script identity skeletons.
+_SCRIPT_SPECIAL = {
+    "\u09CE": "त्", "\u09DC": "ड़", "\u09DD": "ढ़", "\u09DF": "य",
+    "\u0A59": "ख़", "\u0A5A": "ग़", "\u0A5B": "ज़", "\u0A5C": "ड़", "\u0A5E": "फ़",
+    "\u0A70": "ं", "\u0A71": "", "\u0A72": "इ", "\u0A73": "उ", "\u0A74": "ओ",
+}
+
+
+def _to_deva(s: str) -> str:
+    out = []
+    for ch in s:
+        if ch in _SCRIPT_SPECIAL:
+            out.append(_SCRIPT_SPECIAL[ch])
+            continue
+        o = ord(ch)
+        if 0x0980 <= o <= 0x09FF:
+            out.append(chr(o - 0x0080))
+        elif 0x0A00 <= o <= 0x0A7F:
+            out.append(chr(o - 0x0100))
+        elif 0x0A80 <= o <= 0x0AFF:
+            out.append(chr(o - 0x0180))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 # ---------------------------------------------------------------- transliteration (Devanagari -> Latin)
 _CONS = {
@@ -25,6 +52,7 @@ NUKTA, HALANT = "़", "्"
 
 
 def deva_to_latin(s: str) -> str:
+    s = _to_deva(unicodedata.normalize("NFD", s))
     out, i, n = [], 0, len(s)
     while i < n:
         ch = s[i]
@@ -60,9 +88,9 @@ _ALIASES = {"mohd": "mohammad", "md": "mohammad", "mohammed": "mohammad", "muham
 
 
 def skel(token: str) -> str:
-    """Script- and spelling-tolerant key for one name token (Latin or Devanagari)."""
+    """Script- and spelling-tolerant key for one name token (Latin or Indic)."""
     t = token.strip(".").lower()
-    if any("ऀ" <= c <= "ॿ" for c in t):
+    if any("\u0900" <= c <= "\u0AFF" for c in t):
         t = deva_to_latin(t)
     t = re.sub(r"[^a-z]", "", t)
     t = _ALIASES.get(t, t)
@@ -78,12 +106,15 @@ def skel(token: str) -> str:
 
 
 # ---------------------------------------------------------------- name structure
-HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|मैडम|जी|साहब|दीदी|भाई|बहन)"
-HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?)"
+HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chacha|chachi|मैडम|जी|साहब|दीदी|भाई|बहन)"
+HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्रीमान|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?|सौ\.?|कै\.?|बीबी|रोगी|मरीज़|मरीज|রোগী)"
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
-                       "prasad", "singh", "shri", "smt", "sahab", "didi", "देवी", "कुमार", "कुमारी", "जी"}
+                       "prasad", "singh", "kaur", "shri", "shriman", "smt", "sahab", "didi", "bhai", "ben",
+                       "kaka", "paaji", "bhau", "tai", "dada", "aaji", "babu", "chacha", "chachaji", "babuji",
+                       "bhaiya", "amma",
+                       "देवी", "कुमार", "कुमारी", "जी", "श्री", "श्रीमान", "श्रीमती", "बीबी"}
 
-KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|पुत्र|पुत्री|पत्नी|पति|पिता|माता|बेटा|बेटी)"
+KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|Dikri|Patni|Puttar|Vali|पुत्र|पुत्री|पत्नी|पति|पिता|माता|बेटा|बेटी|पुत्तर|धी|घरवाली|मुलगा|मुलगी|नवरा)"
 
 # Words that may follow "C/O" when it means "complaint of"
 COMPLAINT_WORDS = re.compile(
@@ -100,13 +131,13 @@ FIELD_RULES = [
     ("ABHA", r"abha\w*|आभा|healthid"),
     ("PAN", r"pan|panno|pannumber"),
     ("EMAIL", r"e?mail|email\w*|ईमेल"),
-    ("PHONE", r"phone\w*|ph|phno|mobile\w*|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom"),
+    ("PHONE", r"phone\w*|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom|भ्रमणध्वनी"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
-    ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|reg|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
-            r"पंजीकरण|पंजीयन|recordno|caseno|ipno|identifier|patientref|patref|mr"),
-    ("DOB", r"dob|birth\w*|birthdate|janm|जन्म|dateofbirth"),
+    ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
+            r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
+    ("DOB", r"dob|birth\w*|birthdate|janm|janam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
-    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|"
+    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|"
                  r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
                  r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|"
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
@@ -117,15 +148,16 @@ FIELD_RULES = [
              r"diagnos\w*|icd\w*|condition|complaint\w*|history|procedure\w*|package\w*|drug\w*|medicin\w*|"
              r"medication\w*|dose|dosage|test\w*|loinc|result\w*|value|unit\w*|range|amount\w*|status|vital\w*|"
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
-             r"distt|jila|जिला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
+             r"distt|jila|jillo|जिला|ज़िला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
              r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*"),
-    ("NAME", r"name|naam|नाम|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|patient|pt|beneficiary|insured|rogi|मरीज|मरीज़|रोगी|first|last|given|family|"
+    ("NAME", r"name|naam|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|patient|pt|beneficiary|insured|rogi|dardi|daradi|client|"
+             r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
-    ("AGE", r"age|umar|umra|आयु|उम्र|ageyears|yrs"),
-    ("VILLAGE", r"village|gaon|gram|mohalla|locality|ग्राम|गाँव|गांव|मोहल्ला|city|town|basti|ward_no"),
-    ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence"),
-    ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|admitted|discharged|collected|registered|on|"
-             r"period|start|end|issued|effective|recorded|authored"),
+    ("AGE", r"age|umar|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs"),
+    ("VILLAGE", r"village|gaon|gaanv|gam|gram|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
+    ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना"),
+    ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
+             r"period|start|end|issued|effective|recorded|authored|दाखला|रिलीज़|सुट्टी"),
 ]
 FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]
 
@@ -155,11 +187,14 @@ def classify_key(key: str) -> str | None:
 
 # Labels that introduce a patient name inside free text
 NAME_LABEL = re.compile(
-    r"(?i)(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|naam|rogi\s*ka\s*naam|"
-    r"mareez|beneficiary|name|nm\.?|नाम|रुग्णाचे\s*नाव|रुग्ण\s*नाव|नाव|मरीज़?\s*का\s*नाम|मरीज़?|रोगी\s*का\s*नाम|रोगी)\s*[:：=\-]\s*")
-ADDRESS_LABEL = re.compile(r"(?i)(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|patta|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी)\s*[:：\-]?\s*")
-VILLAGE_LABEL = re.compile(r"(?i)(?:vill(?:age)?\.?|gaon|gram|ग्राम|गाँव|गांव|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
-DOB_LABEL = re.compile(r"(?i)(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*tithi)\s*[:：\-]?\s*")
+    rf"(?i)(?:^|(?<=[\s,;|(\[]))(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|"
+    rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|name|nm\.?|"
+    rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী)\s*[:：=\-]+\s*")
+ADDRESS_LABEL = re.compile(
+    r"(?i)(?:^|(?<=[\s,;|(\[]))(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|"
+    r"patta|sarnamu|rihaish|thikana|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना)\s*[:：\-]+\s*")
+VILLAGE_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:vill(?:age)?\.?|gaon|gam|gram|ग्राम|गाँव|गांव|पिंड|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
+DOB_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*(?:tithi|tarikh))\s*[:：\-]+\s*")
 
 # Clinical vocabulary used to protect spans (never PII on their own)
 CLINICAL_WORDS = {
@@ -191,4 +226,6 @@ paswan manjhi mahto kurmi pal baghel tomar sengar bundela bhadauria sisodia rana
 jadhav shinde patil deshmukh gaikwad more naik menon panicker kurup warrier namboodiri iyengar subramanian krishnan
 ramachandran venkatesh murthy gowda hegde shetty pai kamath bhat fernandes dsouza dcosta pereira gomes rodrigues
 lobo sequeira mascarenhas francis thomas joseph varghese mathew george kurian abraham chacko cherian
+vohra memon makwana brar sandhu biswas deshmukh kulkarni wankhede bhoyar kharwar ojha gond mulla pathan
+manjhi paswan sahni mandal rajak bhagat bhat
 """.split())

@@ -8,7 +8,7 @@ import re
 
 from . import lexicon as L
 from .engine import STOP_WORDS as STOPW
-from .engine import RX_DOTTED_AADHAAR, RX_DOTTED_PHONE
+from .engine import INDIC_DIG, RX_DOTTED_AADHAAR, RX_DOTTED_PHONE, _INDIC_DIGITS
 from .engine import (CLIN_PROTECT, COMMON_WORDS, DEVA, NAME_SEQ, NAME_TOK, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK,
                      RX_MASKED_AADHAAR, RX_PAN, classify_digits, clean_name_seq, id_digits_ok, norm,
                      shift_dates_in)
@@ -78,25 +78,30 @@ class Sweeper:
 # ---------------------------------------------------------------- pieces
 RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,65536}={0,2}")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
-RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|ji\.|jilha|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
+RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|jillo|ji\.|jilha|ज़िला|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
-RX_HOUSE = re.compile(rf"(?i)(?:(?:घर|मकान|म\.)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)\s*[\d०-९]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
-RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
-RX_DEVA_VILLAGE = re.compile(rf"(?<![{DEVA}])[{DEVA}]{{2,}}(?:पुर|पुरा|गांव|गाँव|गाव|पट्टी|वाडी|नगर|खेड़ा|खेडा|डीह|सराय|गंज)(?:\s+(?:टांडा|बुद्रुक|खुर्द|कलां|कला|पूर्वी|पश्चिमी))?(?![{DEVA}])"
-                             rf"|(?<![{DEVA}])[{DEVA}]{{2,}}\s+(?:टांडा|बुद्रुक|खुर्द|कलां)(?![{DEVA}])")
+RX_HOUSE = re.compile(rf"(?i)(?:(?:घर|मकान|म\.|कोठी)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)?\s*[{INDIC_DIG}]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?|Kothi\s*(?:No\.?|number)?|Block\s*(?:No\.?)?)\s*[:\-]?\s*(?=\S*[{INDIC_DIG}])[\w/\-{INDIC_DIG}]+|मकान\s*(?:नं\.?|नंबर)?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+|म\.\s*नं\.?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+)")
+RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?|Faliyu)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|\bPara\s+[A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}})?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
+RX_DEVA_VILLAGE = re.compile(rf"(?<![{DEVA}])[{DEVA}]{{2,}}(?:पुर|पुरा|गांव|गाँव|गाव|पट्टी|वाडी|नगर|खेड़ा|खेडा|डीह|सराय|गंज|वाव|कोट|वाला|डांगा)(?:\s+(?:टांडा|बुद्रुक|खुर्द|कलां|कला|पूर्वी|पश्चिमी|मोटा|नाना))?(?![{DEVA}])"
+                             rf"|(?<![{DEVA}])[{DEVA}]{{2,}}\s+(?:टांडा|बुद्रुक|खुर्द|कलां|मोटा|नाना)(?![{DEVA}])")
 RX_WARD_ADDR = re.compile(r"(?i)(?<=,\s)Ward\s*(?:No\.?)?\s*\d+\b(?!\s*[(/])|\bWard\s*(?:No\.?)?\s*\d+(?=\s*,)")
 RX_WARDNUM = re.compile(r"(?i)\bWard\s*(?:No\.?)?\s*\d+(?!\s*\()")
-RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने)|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
-RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
+RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}"
+                         rf"|\b[A-Za-z0-9'\-]{{2,}}(?:\s+[A-Za-z0-9'\-]{{2,}}){{0,3}}\s+(?:pase|pashe|de\s+kol)\b"
+                         rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने|दे\s+कोल|पासे|पाशे)"
+                         rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
+RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
-RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/Sex)?|\bAge\s*/\s*Gender|आयु|उम्र|\bUmar|\bUmra)\s*[:\-]?\s*)(\d{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|saal|sal)?)"
-                    rf"|(?<![\w.x×])(\d{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
+RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|आयु|उम्र|उमर|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
+                    rf"|(?<![\w.x×])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
 RX_URL = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+|\burn:(?:uuid|oid):[\w.\-]+")
 RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|वर्ष|saal|sal)\b\.?(?:\s*old)?)(?=\s*[,/;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|पुरुष|महिला|$|,|\)|;))")
+RX_KIN_POSS = re.compile(rf"(?i)\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|श्रीमती)\s+({NAME_SEQ})'s\s+(?:wife|husband|son|daughter|father|mother)\b")
 RX_KIN = re.compile(rf"(?i)\b({L.KIN})\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
 RX_HON_AFTER = re.compile(rf"({NAME_SEQ})(\s+{L.HONORIFIC_AFTER})\b")
 RX_HON_BEFORE = re.compile(rf"\b({L.HONORIFIC_BEFORE})\s+({NAME_SEQ})")
+RX_ATTACH_FILE = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9_\-.]{3,80}\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|tiff?|bmp|txt|csv|tsv|json|xml|rtf|dcm))\b", re.I)
 
 
 def _name_ok(toks: list[str]) -> bool:
@@ -161,6 +166,72 @@ def b64_scrub(tok: str, ctx: "Ctx", sw: "Sweeper") -> str:
     return base64.b64encode(clean.encode("utf-8")).decode("ascii")
 
 
+_SAFE_URL_HOSTS = ("hl7.org", "snomed.info", "loinc.org", "w3.org", "abdm.gov.in", "nrces.in", "unitsofmeasure.org", "fhir.org")
+_SAFE_URL_WORDS = {"discharge", "summary", "report", "nursing", "notes", "rx", "lab", "opd", "ipd", "bundle",
+                   "export", "visits", "patients", "results", "claims", "registration", "file", "data", "json",
+                   "csv", "txt", "tsv", "pdf", "fmt", "lang", "view", "page", "index", "static", "app", "api"}
+_URL_PII_KEYS = {"patient", "pt", "name", "naam", "mr", "mrn", "uhid", "id", "pid", "phone", "mob", "mobile",
+                 "email", "dob", "aadhaar", "abha", "pan", "user", "query", "q"}
+
+
+def _scrub_url(url: str, ctx: Ctx, sw: Sweeper, put) -> str:
+    if url.lower().startswith("urn:"):
+        return put(url)
+    base, sep, query = url.partition("?")
+    host_part = base.split("://", 1)[1].split("/", 1)[0].lower() if "://" in base else ""
+    if any(host_part == h or host_part.endswith("." + h) for h in _SAFE_URL_HOSTS):
+        return put(url)
+    # Scrub PII inside URL path segments (beyond scheme+host) and query parameters
+    if query:
+        parts = []
+        for pair in query.split("&"):
+            k, eq, v = pair.partition("=")
+            kl = k.lower()
+            if eq and (kl in _URL_PII_KEYS or L.classify_key(k) in ("NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "EMAIL", "PAN")):
+                ctx.stats["identifiers"] += 1
+                parts.append(f"{k}=REDACTED")
+            elif eq:
+                sv = scrub_text(v.replace("+", " "), ctx, sw, allow_b64=False)
+                parts.append(f"{k}={sv.replace(' ', '+')}" if sv != v.replace("+", " ") else pair)
+            else:
+                parts.append(pair)
+        query = "&".join(parts)
+    # Only mask scheme+host+safe-path so FHIR/portal base URLs survive without hiding PII
+    return put(base) + (sep + query if sep else "")
+
+
+def _scrub_attach(m, ctx: Ctx, sw: Sweeper, put) -> str:
+    comp = m.group(1)
+    stem, ext = os.path.splitext(comp)
+    parts = re.split(r"([_\-.]+)", stem)
+    toks = [p for p in parts if p and not re.fullmatch(r"[_\-.]+", p)]
+    safe_words = _SAFE_URL_WORDS | COMMON_WORDS | L.CLINICAL_WORDS | L.MED_ACRONYMS
+    flagged = set()
+    for p in toks:
+        pl = p.lower()
+        if pl in safe_words:
+            continue
+        if pl in sw.H.name_tokens or re.sub(r"[^0-9A-Za-z]", "", p).upper() in sw.H.ids:
+            flagged.add(p)
+    for a, b in zip(toks, toks[1:]):
+        if (re.fullmatch(r"[A-Z][a-z]{2,}", a) and re.fullmatch(r"[A-Z][a-z]{2,}", b)
+                and not ({a.lower(), b.lower()} & safe_words)):
+            flagged.add(a)
+            flagged.add(b)
+    if not flagged:
+        return comp
+    ctx.stats["identifiers"] += 1
+    out = []
+    for p in parts:
+        if p in flagged:
+            if not out or out[-1] != "[NAME]":
+                out.append("[NAME]")
+        else:
+            out.append(p)
+    cleaned = re.sub(r"[_\-.]{2,}", "_", "".join(out)).strip("_-. ") or "[FILE]"
+    return put(cleaned + ext)
+
+
 def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     if not text or not text.strip():
         return text
@@ -186,8 +257,9 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(1) - m.start(0)] + put(generalize_address(m.group(1)))
     t = RX_ADDR_LINE.sub(addr, t)
 
-    # 2. protect URLs / XML namespaces, doctor names and clinical expressions
-    t = RX_URL.sub(lambda m: put(m.group(0)), t)
+    # 2. protect URLs (scrubbing query params first), attachment filenames, doctor names
+    t = RX_URL.sub(lambda m: _scrub_url(m.group(0), ctx, sw, put), t)
+    t = RX_ATTACH_FILE.sub(lambda m: _scrub_attach(m, ctx, sw, put), t)
     t = RX_DOCTOR.sub(lambda m: put(m.group(0)), t)
 
     # 3. dates -> per-patient shift (masked so later digit rules never touch them)
@@ -207,7 +279,6 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return put(f"[{kind}]")
     t = RX_DIGITRUN.sub(digrun, t)
-    t = sw.rx_digits.sub(red("[ID]"), t)
     t = RX_PAN.sub(red("[PAN]"), t)
 
     def idtok(m):
@@ -217,6 +288,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return put(ctx.psn or "[ID]")
     t = RX_IDTOK.sub(idtok, t)
+    t = sw.rx_digits.sub(red("[ID]"), t)
 
     def idlab(m):
         st["identifiers"] += 1
@@ -237,6 +309,14 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return m.group(0)[: m.start(m.lastindex) - m.start(0)] + put(ctx.patient_token) + seq[consumed:]
     t = RX_LABEL.sub(lab, t)
+
+    def kin_poss(m):
+        toks = clean_name_seq(m.group(1))
+        if not _name_ok(toks):
+            return m.group(0)
+        st["identifiers"] += 1
+        return m.group(0)[: m.start(1) - m.start(0)] + put("[RELATIVE]") + m.group(0)[m.end(1) - m.start(0):]
+    t = RX_KIN_POSS.sub(kin_poss, t)
 
     def kin(m):
         rel, seq = m.group(1), m.group(2)
@@ -337,9 +417,9 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     # 8. labelled ages -> truthful bands
     def age(m):
         if m.group(2):
-            a = int(m.group(2))
+            a = int(m.group(2).translate(_INDIC_DIGITS))
             return m.group(1) + put(ctx.band(a)) + (m.group(3) or "")
-        a = int(m.group(4))
+        a = int(m.group(4).translate(_INDIC_DIGITS))
         return put(ctx.band(a)) + m.group(5)
     t = RX_AGE.sub(age, t)
 
