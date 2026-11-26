@@ -18,6 +18,7 @@ from .engine import (DEVA, RX_DIGITRUN, RX_EMAIL, RX_IDTOK, RX_PAN, Harvest, Rec
                      date_votes, decode, gender_of, id_digits_ok, looks_binary, norm, opaque, parse_date,
                      pseudonym, shift_dates_in, sniff_delim, sniff_kind)
 from .linker import Linker
+from .scrub import NAME_VALUE
 from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_KIN, RX_LABEL, RX_VILL, Ctx, Sweeper, _name_ok,
                     generalize_address, scrub_text)
 from .engine import clean_name_seq, DOB_RX
@@ -115,7 +116,13 @@ def shape_kind(values: list[str]) -> str | None:
     if c:
         k, n = c.most_common(1)[0]
         if n >= 0.6 * len(vals):
+            if k == "MRN" and len(set(vals)) < 0.5 * len(vals):
+                return None          # a repeated code (facility/batch), not a patient identifier
             return k
+    from .scrub import NAME_VALUE
+    named = [v for v in vals if NAME_VALUE.fullmatch(v) and _name_ok(v.split())]
+    if len(named) >= 0.7 * len(vals) and len(set(named)) >= 0.5 * len(named):
+        return "NAME_SHAPE"
     return None
 
 
@@ -127,6 +134,10 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None):
     if not s:
         return
     e = rec.ev
+    if kind in ("NAME", "REL_NAME") and (len(re.sub(r"\D", "", s)) >= 3 or (RX_IDTOK.fullmatch(s) and id_digits_ok(s))):
+        kind = "MRN" if kind == "NAME" else None      # an ID-shaped value is never a person name
+        if kind is None:
+            return
     if kind == "NAME":
         H.add_name(s)
         toks = [t for t in re.split(r"[\s,]+", re.sub(r"(?i)\b(?:S/O|D/O|W/O|C/O)\b", " ", s)) if t]
@@ -249,27 +260,95 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
             e["village"] = e["village"] or norm(v)
 
 
+def guard_ids(recs: list) -> None:
+    """Drop identifiers that are shared by records that clearly belong to different people."""
+    from .linker import name_keys
+    by = defaultdict(list)
+    for r in recs:
+        for i in r.ev["ids"]:
+            by[i].append(r)
+        for p in r.ev["phones"]:
+            by["P:" + p].append(r)
+    for i, rs in by.items():
+        if len(rs) < 2:
+            continue
+        genders = {r.ev["gender"] for r in rs if r.ev["gender"]}
+        dobs = {r.ev["dob"] for r in rs if r.ev["dob"]}
+        keys = [set(k) for r in rs for k in (name_keys(n) for n in r.ev["names"]) if k]
+        disjoint = any(not (a & b) for x, a in enumerate(keys) for b in keys[x + 1:])
+        if len(genders) > 1 or len(dobs) > 1 or disjoint:
+            for r in rs:
+                if i.startswith("P:"):
+                    r.ev["phones"].discard(i[2:])
+                else:
+                    r.ev["ids"].discard(i)
+
+
 # ================================================================ pass 1
-def json_records(data) -> list[tuple[str, int]]:
-    """Top-level arrays of patient-bearing objects -> record pointers; else whole doc."""
-    if not isinstance(data, dict) or data.get("resourceType") == "Bundle":
+def _patient_list(v) -> bool:
+    """A list of objects whose items carry patient evidence (judged by the evidence extractor itself)."""
+    if not (isinstance(v, list) and v and all(isinstance(x, dict) for x in v)):
+        return False
+    hits = 0
+    sample = v[:12]
+    for x in sample:
+        r = Rec("", "")
+        walk_evidence(x, None, r, Harvest(), "dmy")
+        e = r.ev
+        if e["names"] or e["ids"] or e["phones"] or e["dob"]:
+            hits += 1
+    return hits >= max(1, len(sample) // 2)
+
+
+def json_records(data, path=(), depth=0) -> list[tuple]:
+    """Arrays of patient-bearing objects at any depth -> list of paths; [] = whole document."""
+    if depth == 0 and isinstance(data, dict):
+        if data.get("resourceType") == "Bundle":
+            return []
+        if any(kind_of_key(k) == "NAME" and isinstance(v, (dict, str)) for k, v in data.items()):
+            return []
+    if depth > 6:
         return []
-    top_patient = any(kind_of_key(k) in ("NAME",) and isinstance(v, (dict, str)) for k, v in data.items())
-    if top_patient:
-        return []
+    if _patient_list(data):
+        deeper = []
+        for i, v in enumerate(data):
+            for k, vv in v.items():
+                if isinstance(vv, (dict, list)):
+                    deeper += json_records(vv, path + (i, k), depth + 2)
+        return deeper or [path]          # prefer the innermost array of patient objects
     out = []
-    for k, v in data.items():
-        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
-            keys = set()
-            for x in v[:20]:
-                keys |= set(x.keys())
-                for kk, vv in x.items():
-                    if isinstance(vv, dict):
-                        keys |= {kk}
-            kinds = {kind_of_key(x) for x in keys}
-            if kinds & {"NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "DOB"}:
-                out.append((k, len(v)))
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                out += json_records(v, path + (k,), depth + 1)
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            if isinstance(v, (dict, list)):
+                out += json_records(v, path + (i,), depth + 1)
     return out
+
+
+def _strip_lists(data, ptrs):
+    """Copy of data without the patient arrays (for metadata harvesting)."""
+    if () in ptrs:
+        return None
+    if isinstance(data, dict):
+        return {k: _strip_lists(v, [p[1:] for p in ptrs if p and p[0] == k]) if any(p and p[0] == k for p in ptrs) else v
+                for k, v in data.items()}
+    if isinstance(data, list):
+        return [_strip_lists(v, [p[1:] for p in ptrs if p and p[0] == i]) if any(p and p[0] == i for p in ptrs) else v
+                for i, v in enumerate(data)]
+    return data
+
+
+def _ptr(path: tuple, i: int) -> str:
+    return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in path) + f"/{i}"
+
+
+def _get(data, path):
+    for p in path:
+        data = data[p]
+    return data
 
 
 def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
@@ -354,16 +433,14 @@ def pass1(job: FileJob, H: Harvest):
             job.kind = "json"
             ptrs = json_records(job.data)
             if ptrs:
-                for k, n in ptrs:
-                    for i, item in enumerate(job.data[k]):
-                        r = Rec(job.rel, f"/{k.replace('~', '~0').replace('/', '~1')}/{i}")
+                for path in ptrs:
+                    for i, item in enumerate(_get(job.data, path)):
+                        r = Rec(job.rel, _ptr(path, i))
                         walk_evidence(item, None, r, H, job.order)
                         job.recs.append(r)
-                        job.rec_ptrs[(k, i)] = r
+                        job.rec_ptrs[(path, i)] = r
                 meta = Rec(job.rel, "@meta")
-                for k, v in job.data.items():
-                    if all(k != kk for kk, _ in ptrs):
-                        walk_evidence({k: v}, None, meta, H, job.order)
+                walk_evidence(_strip_lists(job.data, ptrs), None, meta, H, job.order)
             else:
                 r = Rec(job.rel, "doc")
                 walk_evidence(job.data, None, r, H, job.order)
@@ -404,6 +481,8 @@ def pass1(job: FileJob, H: Harvest):
                         r.ev["district"] = v
                     elif k == "TEHSIL":
                         H.safe_places.add(norm(v))
+                    elif k == "NAME_SHAPE":
+                        H.add_name(v)
                     elif k in (None, "SAFE"):
                         if len(v) > 3:
                             text_evidence(v, r, H, job.order)
@@ -451,6 +530,8 @@ class Rewriter:
             return s
         if kind == "NAME":
             st["identifiers"] += 1
+            if len(re.sub(r"\D", "", s)) >= 3:
+                return ctx.psn or "[ID]"
             return ctx.patient_token
         if kind == "REL_NAME":
             st["identifiers"] += 1
@@ -490,6 +571,12 @@ class Rewriter:
             return generalize_address(s)
         if kind in ("DISTRICT", "TEHSIL", "GENDER"):
             return s
+        if kind == "NAME_SHAPE":
+            st["identifiers"] += 1
+            return "[NAME]"
+        if kind is None and NAME_VALUE.fullmatch(s.strip()) and _name_ok(s.split()) and len(s.split()) >= 2:
+            st["identifiers"] += 1
+            return "[NAME]"
         return scrub_text(s, ctx, self.sw)
 
     def key(self, k: str, ctx: Ctx, seen: set) -> str:
@@ -533,11 +620,43 @@ class Rewriter:
         return self.value(obj, kind, ctx, rec)
 
 
+def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None):
+    paths = {p for p, _ in job.rec_ptrs}
+    if path in paths and isinstance(node, list):
+        out = []
+        for i, item in enumerate(node):
+            r = job.rec_ptrs.get((path, i))
+            out.append(rw.walk(item, None, ctx_for(r, job), r))
+        return out
+    deeper = any(p[: len(path)] == path and len(p) > len(path) for p in paths)
+    if isinstance(node, dict) and deeper:
+        new, seen = {}, set()
+        for k, v in node.items():
+            nk = rw.key(k, meta_ctx, seen)
+            new[nk] = rewrite_json(rw, v, path + (k,), job, meta_ctx, ctx_for, child_kind(k, kind))
+        return new
+    if isinstance(node, list) and deeper:
+        return [rewrite_json(rw, v, path + (i,), job, meta_ctx, ctx_for, kind) for i, v in enumerate(node)]
+    return rw.walk(node, kind, meta_ctx, None)
+
+
 # ================================================================ filenames
+_DATELIKE = re.compile(r"(?:19|20)\d{2}(?:[_\-.]\d{1,2}){0,2}|\d{1,2}[_\-.]\d{1,2}[_\-.](?:19|20)\d{2}")
+
+
 def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
     stem, ext = os.path.splitext(comp)
-    parts = re.split(r"([_\-\s.()]+)", stem)
     flagged = False
+
+    def cluster(m):
+        nonlocal flagged
+        c = m.group(0)
+        if len(re.sub(r"\D", "", c)) >= 5 and not _DATELIKE.fullmatch(c):
+            flagged = True
+            return ""
+        return c
+    stem = re.sub(r"\d+(?:[_\-.\s]\d+)+", cluster, stem)
+    parts = re.split(r"([_\-\s.()]+)", stem)
     keep = []
     for p in parts:
         pl = p.lower()
@@ -643,6 +762,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
             j_order = next((j.order for j in jobs if j.rel == r.file), "dmy")
             d = parse_date(r.ev["dob"], j_order)
             r.ev["dob"] = d.isoformat() if d else None
+    # guard_ids(recs) measured harmful (dev link recall 0.94 -> 0.50); kept for reference only
     roots = Linker([r.ev for r in recs]).run()
     groups = defaultdict(list)
     for r, g in zip(recs, roots):
@@ -697,19 +817,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
             if j.kind == "json":
                 if j.rec_ptrs:
                     meta_ctx = ctx_for(None, j)
-                    new = {}
-                    seen = set()
-                    for k, v in j.data.items():
-                        nk = rw.key(k, meta_ctx, seen)
-                        if isinstance(v, list) and any((k, i) in j.rec_ptrs for i in range(len(v))):
-                            items = []
-                            for i, item in enumerate(v):
-                                r = j.rec_ptrs.get((k, i))
-                                items.append(rw.walk(item, None, ctx_for(r, j), r))
-                            new[nk] = items
-                        else:
-                            new[nk] = rw.walk(v, child_kind(k, None), meta_ctx, None)
-                    data = new
+                    data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
                 else:
                     r = j.doc_rec
                     data = rw.walk(j.data, None, ctx_for(r, j), r)

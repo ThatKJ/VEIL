@@ -121,6 +121,12 @@ def sniff_delim(text: str, ext: str) -> str:
 
 # ============================================================== dates
 _MON = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+_HI_MON = {"जनवरी": 1, "फ़रवरी": 2, "फरवरी": 2, "मार्च": 3, "अप्रैल": 4, "अप्रेल": 4, "मई": 5, "जून": 6, "जुलाई": 7,
+           "अगस्त": 8, "सितंबर": 9, "सितम्बर": 9, "अक्टूबर": 10, "अक्तूबर": 10, "नवंबर": 11, "नवम्बर": 11,
+           "दिसंबर": 12, "दिसम्बर": 12}
+_HI_NAMES = {1: "जनवरी", 2: "फ़रवरी", 3: "मार्च", 4: "अप्रैल", 5: "मई", 6: "जून", 7: "जुलाई", 8: "अगस्त", 9: "सितंबर",
+             10: "अक्टूबर", 11: "नवंबर", 12: "दिसंबर"}
+RX_HID = re.compile(r"(?<![\d])(\d{1,2})\s+(" + "|".join(sorted(_HI_MON, key=len, reverse=True)) + r")\s*,?\s+((?:19|20)\d{2})(?!\d)")
 _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
              "November", "December"]
 RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2})(?![\d/.\-])")
@@ -213,6 +219,14 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
             new_mon = new_mon[:3] + ("." if name.endswith(".") else "")
         return w(f"{new_mon} {n.day}{_ord(n.day) if m.group(4) else ''}, {n.year}")
 
+    def hid(m):
+        d = _mk(int(m.group(3)), _HI_MON[m.group(2)], int(m.group(1)))
+        if not d:
+            return m.group(0)
+        n = d + delta
+        return w(f"{n.day} {_HI_NAMES[n.month]} {n.year}")
+
+    text = RX_HID.sub(hid, text)
     text = RX_ISO.sub(iso, text)
     text = RX_DMY.sub(dmy, text)
     text = RX_TEXTD.sub(textd, text)
@@ -240,6 +254,9 @@ def parse_date(s: str, order: str) -> dt.date | None:
     m = RX_TEXTD.search(s)
     if m:
         return _mk(int(m.group(7)), _MON[m.group(4).lower()[:3]], int(m.group(1)))
+    m = RX_HID.search(s)
+    if m:
+        return _mk(int(m.group(3)), _HI_MON[m.group(2)], int(m.group(1)))
     return None
 
 

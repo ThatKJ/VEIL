@@ -6,7 +6,8 @@ import binascii
 import re
 
 from . import lexicon as L
-from .engine import (CLIN_PROTECT, COMMON_WORDS, DEVA, NAME_SEQ, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK,
+from .engine import STOP_WORDS as STOPW
+from .engine import (CLIN_PROTECT, COMMON_WORDS, DEVA, NAME_SEQ, NAME_TOK, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK,
                      RX_MASKED_AADHAAR, RX_PAN, classify_digits, clean_name_seq, id_digits_ok, norm,
                      shift_dates_in)
 
@@ -107,6 +108,13 @@ _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
                          rf"handed\s+over\s+to|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
+RX_CONSENT = re.compile(rf"(?i)\b(?:I|मैं)\s*,?\s+({NAME_SEQ})\s*,?\s+(?:S/O|D/O|W/O|consent|agree|hereby|authori[sz]e|declare|give|am|aged|resident)\b")
+RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}})\s+(?:visited|came|called|met|brought|accompanied|"
+                          rf"signed|left|arrived|requested|collected|took|stayed|attended|enquired)\b")
+NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{1,3}})")
+RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.?\s*(?:No|Number|#)|IP\s*No|IPD\s*No|OPD\s*No|"
+                         r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Record\s*No|File\s*No|"
+                         r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-]{2,})")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
                           rf"mother|brother|sister|guardian|neighbour|friend)\b", re.I)
 
@@ -195,6 +203,11 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return put(ctx.psn or "[ID]")
     t = RX_IDTOK.sub(idtok, t)
 
+    def idlab(m):
+        st["identifiers"] += 1
+        return m.group(0)[: m.start(1) - m.start(0)] + put(ctx.psn or "[ID]")
+    t = RX_ID_LABEL.sub(idlab, t)
+
     for rx in L_CLIN:
         t = rx.sub(lambda m: put(m.group(0)), t)
 
@@ -252,6 +265,15 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return m.group(0)[: m.start(g) - m.start(0)] + put("[NAME]") + rest + m.group(0)[m.end(g) - m.start(0):]
     t = RX_CTX_NAME.sub(ctxname, t)
+    t = RX_CONSENT.sub(ctxname, t)
+
+    def nverb(m):
+        toks = m.group(1).split()
+        if not _name_ok(toks) or any(w.lower() in STOPW for w in toks):
+            return m.group(0)
+        st["identifiers"] += 1
+        return put("[NAME]") + m.group(0)[m.end(1) - m.start(0):]
+    t = RX_NAME_VERB.sub(nverb, t)
     t = RX_NAME_ROLE.sub(lambda m: (put("[NAME]") + m.group(0)[m.end(1) - m.start(0):]) if _name_ok(clean_name_seq(m.group(1))) and clean_name_seq(m.group(1)) == m.group(1).split() else m.group(0), t)
 
     def surname(m):

@@ -107,7 +107,9 @@ FIELD_RULES = [
     ("DOB", r"dob|birth\w*|birthdate|janm|जन्म|dateofbirth"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
     ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|"
-                 r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*"),
+                 r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
+                 r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|"
+                 r"broughtby|accompanied\w*|consenter|signatory"),
     ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|relation_type"),
     ("DOCTOR", r"doctor\w*|dr|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
                r"nurse|staff|clerk|exported|exportedby|practitioner|performer|author|signedby|verifiedby"),
