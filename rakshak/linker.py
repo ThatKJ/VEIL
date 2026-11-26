@@ -50,6 +50,10 @@ def name_keys(tokens: list[str]) -> tuple[str, ...]:
         s = L.skel(_strip_fused_suffix(tl))
         if s and (len(s) >= 2 or len(tl) >= 2):
             ks.append(s)
+        elif not s:
+            u = re.sub(r"[^0-9a-z\u0B00-\u0DFF]", "", tl)
+            if len(u) >= 2 and not u.isdigit():
+                ks.append("~" + u)
     return tuple(ks)
 
 
@@ -133,6 +137,11 @@ def _given_conflict(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
 def _name_compatible(a: Cluster, b: Cluster) -> bool:
     if not a.names or not b.names:
         return True
+    ma = [x for x in a.names if sum(len(t) >= 2 for t in x) >= 2]
+    mb = [y for y in b.names if sum(len(t) >= 2 for t in y) >= 2]
+    if ma and mb and os.environ.get("RAKSHAK_P_GIVEN_VETO", "on") != "off":
+        if all(_given_conflict(x, y) for x in ma for y in mb):
+            return False
     for x in a.names:
         for y in b.names:
             mx = {t for t in x if len(t) >= 2}

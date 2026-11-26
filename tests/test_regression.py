@@ -603,6 +603,135 @@ class RegressionTests(unittest.TestCase):
             self.assertNotIn("Bala Nair", mixed_lines[1])
             self.assertNotIn("Raju Das", mixed_lines[2])
 
+    def test_phase11_dates_indic_digits_kin_boundary_and_urls(self):
+        import re
+        with tempfile.TemporaryDirectory() as d:
+            inp, out = Path(d) / "in", Path(d) / "out"
+            inp.mkdir()
+            (inp / "note.txt").write_text(
+                "Patient Name: Arvind Menon, 34 vayasulla purushan\n"
+                "Note: Attendant from Valiyakath (H), Kozhikode 673001\n"
+                "DOB: 16071984\n"
+                "Admitted 20/1/2025. Discharged on 27/1/2025.\n"
+                "Compact Admit: 06042025, 1607198400 units\n"
+                "BP: 130/80 mmHg. HbA1c 7.4 %\n"
+                "Aadhaar: ൫൨൫൩ ൫൯൩൮ ൯൨൨൧, Phone: ൬൨൧൮൭൦൬൯൯൯\n"
+                "WhatsApp: https://wa.me/919876501234, Call tel:+919876501234\n"
+                "Printed for Farhan Qureshi\n"
+                "Copy ayachu: Nikhil Bose, Copy sent to Mohan Nair\n"
+                "-----BEGIN STRUCTURED-----\n"
+                '{"patient_name": "Arvind Menon", "ration_card": "5353608347", "pin": "673001"}\n'
+                "-----END STRUCTURED-----\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-p11-a")
+            san = (out / "sanitized" / "note.txt").read_text(encoding="utf-8")
+            self.assertIn("Valiyakath", san)
+            self.assertNotIn("Vali[RELATIVE]", san)
+            self.assertIn("BP: 130/80", san)
+            self.assertIn("1607198400 units", san)
+            for leak in ("Arvind Menon", "16071984", "06042025", "5353608347", "673001",
+                         "൫൨൫൩", "൬൨൧൮൭൦൬൯൯൯", "9876501234", "Farhan Qureshi", "Nikhil Bose", "Mohan Nair"):
+                if leak == "16071984":
+                    self.assertNotRegex(san, r"\b16071984\b")
+                else:
+                    self.assertNotIn(leak, san)
+            self.assertNotIn("20/1/2025", san)
+            self.assertNotIn("27/1/2025", san)
+            m_adm = re.search(r"Admitted (\d{1,2})/(\d{1,2})/(\d{4})\.", san)
+            m_dis = re.search(r"Discharged on (\d{1,2})/(\d{1,2})/(\d{4})\.", san)
+            self.assertIsNotNone(m_adm)
+            self.assertIsNotNone(m_dis)
+            import datetime as _dt
+            d_adm = _dt.date(int(m_adm.group(3)), int(m_adm.group(2)), int(m_adm.group(1)))
+            d_dis = _dt.date(int(m_dis.group(3)), int(m_dis.group(2)), int(m_dis.group(1)))
+            self.assertEqual((d_dis - d_adm).days, 7)
+
+    def test_phase11_no_false_merges_and_structured_variants(self):
+        with tempfile.TemporaryDirectory() as d:
+            inp, out = Path(d) / "in", Path(d) / "out"
+            inp.mkdir()
+            (inp / "op_reg.csv").write_text(
+                "op_no,name,relative_name,address,ration_card\n"
+                "OP-101,Balan Nair,Valiyakath (H),Thamasasthalam Near Bridge Door 102 Kozhikode 673828,RC-998877\n"
+                "OP-102,Kavitha Nair,Valiyakath (H),Thamasasthalam Near Bridge Door 102 Kozhikode 673828,RC-998877\n"
+                "OP-103,,Valiyakath House,Some Road 102,\n"
+                "OP-104,,Valiyakath House,Another Road 102,\n",
+                encoding="utf-8",
+            )
+            (inp / "str_recs.json").write_text(
+                json.dumps({
+                    "records": [
+                        json.dumps({"mrn": "IP-701", "name": "Gopal Verma", "phone": "9811100001", "pin": "124999"}),
+                        json.dumps({"mrn": "IP-702", "name": "Sita Verma", "phone": "9811100002", "pin": "125001"}),
+                    ]
+                }),
+                encoding="utf-8",
+            )
+            (inp / "coded.json").write_text(
+                json.dumps({
+                    "column_codes": {"c01": "op_nambar", "c02": "peru", "c08": "fon", "c10": "abha", "c11": "melvilasam"},
+                    "rows": [
+                        {"c01": "OP-901", "c02": "Karthik Subramanian", "c08": "9845012345",
+                         "c10": "91-9120-7394-3084", "c11": "14 Temple Road 600001"}
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            (inp / "payload.csv").write_text(
+                "id,payload_json\n"
+                '1,"{""name"": ""Rohan Gill"", ""pin"": ""124999"", ""audit"": {""merged_from"": ""Zubin Talwar""}}"\n',
+                encoding="utf-8",
+            )
+            (inp / "sync_q.json").write_text(
+                json.dumps({"sql": "UPDATE pts SET naam='X'; -- naam theek kiya, pehle: Tariq Mansoor"}),
+                encoding="utf-8",
+            )
+            (inp / "super.tsv").write_text(
+                "Pehchan\t\tPata\t\n"
+                "UHID\tNaam\tPin\tDiagnosis\n"
+                "UH-55\tMeenakshi Iyer\t124999\tEssential hypertension\n",
+                encoding="utf-8",
+            )
+            (inp / "eav.csv").write_text(
+                "UHID,Khana,Keemat,Bharne_wala,Samay\n"
+                "UH-55,Naam,Meenakshi Iyer,DEO Sunita Sharma,12/02/2025\n"
+                "UH-55,Hemoglobin,11.2 g/dL,DEO Sunita Sharma,12/02/2025\n"
+                "UH-55,Pin,124999,DEO Sunita Sharma,12/02/2025\n",
+                encoding="utf-8",
+            )
+            (inp / "stacked.csv").write_text(
+                "LAB EXPORT\n"
+                "MAREEZ\n"
+                "UHID,Naam,Test,Value\n"
+                "UH-88,Harpreet Kaur,Creatinine,0.9 mg/dL\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-p11-b")
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+            op_pids = {r["loc"]: r["patient"] for r in recs if r["file"] == "sanitized/op_reg.csv"}
+            self.assertNotEqual(op_pids["row:0"], op_pids["row:1"])
+            self.assertNotEqual(op_pids["row:2"], op_pids["row:3"])
+            str_pids = [r["patient"] for r in recs if r["file"] == "sanitized/str_recs.json"]
+            self.assertEqual(len(str_pids), 2)
+            self.assertNotEqual(str_pids[0], str_pids[1])
+            for fname in ("op_reg.csv", "str_recs.json", "coded.json", "payload.csv", "sync_q.json", "super.tsv", "eav.csv", "stacked.csv"):
+                txt = (out / "sanitized" / fname).read_text(encoding="utf-8")
+                for bad in ("Balan Nair", "Kavitha Nair", "Gopal Verma", "Sita Verma", "Karthik Subramanian",
+                            "9845012345", "91-9120-7394-3084", "Rohan Gill", "Zubin Talwar", "Tariq Mansoor",
+                            "124999", "125001", "Meenakshi Iyer", "Harpreet Kaur"):
+                    self.assertNotIn(bad, txt, f"{bad} leaked in {fname}")
+            self.assertIn("Essential hypertension", (out / "sanitized" / "super.tsv").read_text(encoding="utf-8"))
+            eav_san = (out / "sanitized" / "eav.csv").read_text(encoding="utf-8")
+            self.assertIn("DEO Sunita Sharma", eav_san)
+            self.assertIn("Hemoglobin", eav_san)
+            self.assertIn("11.2 g/dL", eav_san)
+            stk_san = (out / "sanitized" / "stacked.csv").read_text(encoding="utf-8")
+            self.assertIn("Creatinine", stk_san)
+            self.assertIn("0.9 mg/dL", stk_san)
+            stk_locs = [r["loc"] for r in recs if r["file"] == "sanitized/stacked.csv"]
+            self.assertEqual(stk_locs, ["row:0"])
+
 
 if __name__ == "__main__":
     unittest.main()

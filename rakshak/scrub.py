@@ -270,26 +270,27 @@ RX_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{2}){6,128}(?![0-9A-Za-z])")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
 RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|jillo|ji\.|jilha|जि\.?|ज़िला|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
-RX_HOUSE = re.compile(rf"(?i)(?:\bH-\d{{1,4}}[A-Za-z]?\b(?=\s*,)|\b(?:Kothi|Ghar|Makaan|Haveli)\s*(?:No\.?|#)?\s*\d{{1,4}}[A-Za-z]?\b|(?:घर|मकान|म\.|कोठी)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)?\s*[{INDIC_DIG}]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?|Kothi\s*(?:No\.?|number)?|Block\s*(?:No\.?)?)\s*[:\-]?\s*(?=\S*[{INDIC_DIG}])[\w/\-{INDIC_DIG}]+|मकान\s*(?:नं\.?|नंबर)?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+|म\.\s*नं\.?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+)")
-RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?|Faliyu|Tola)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|\bGali\s+(?:No\.?\s*)?\d+|\bPara\s+[A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}})?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
+RX_HOUSE = re.compile(rf"(?i)(?:\bH-\d{{1,4}}[A-Za-z]?\b(?=\s*,)|\bWard\s*(?:No\.?)?\s*\d+\s*/\s*Door\b|\b(?:Kothi|Ghar|Makaan|Haveli|Door|Dhani)\s*(?:No\.?|#)?\s*\d{{1,4}}[A-Za-z]?\b|(?:घर|मकान|म\.|कोठी)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)?\s*[{INDIC_DIG}]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?|Kothi\s*(?:No\.?|number)?|Block\s*(?:No\.?)?)\s*[:\-]?\s*(?=\S*[{INDIC_DIG}])[\w/\-{INDIC_DIG}]+|मकान\s*(?:नं\.?|नंबर)?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+|म\.\s*नं\.?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+)")
+RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?|Faliyu|Tola|Thola|Panna|Khera|Vihar)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|\bGali\s+(?:No\.?\s*)?\d+|\bPara\s+[A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}})?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
 RX_DEVA_VILLAGE = re.compile(rf"(?<![{DEVA}])[{DEVA}]{{2,}}(?:पुर|पुरा|गांव|गाँव|गाव|पट्टी|वाडी|नगर|खेड़ा|खेडा|डीह|सराय|गंज|वाव|कोट|वाला|डांगा)(?:\s+(?:टांडा|बुद्रुक|खुर्द|कलां|कला|पूर्वी|पश्चिमी|मोटा|नाना))?(?![{DEVA}])"
                              rf"|(?<![{DEVA}])[{DEVA}]{{2,}}\s+(?:टांडा|बुद्रुक|खुर्द|कलां|मोटा|नाना)(?![{DEVA}])")
 RX_WARD_ADDR = re.compile(r"(?i)(?<=,\s)Ward\s*(?:No\.?)?\s*\d+\b(?!\s*[(/])|\bWard\s*(?:No\.?)?\s*\d+(?=\s*,)")
 RX_WARDNUM = re.compile(r"(?i)\bWard\s*(?:No\.?)?\s*\d+(?!\s*\()")
 RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}"
+                         rf"|\b[A-Z][a-z]+\s+(?:Junction|Angadi)\b|\b[A-Za-z]{{3,}}-inu\s+(?:munpil|adutth|samipam|pinpil)"
                          rf"|\b[A-Za-z0-9'\-]{{2,}}(?:\s+[A-Za-z0-9'\-]{{2,}}){{0,3}}\s+(?:pase|pashe|de\s+kol)\b"
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने|दे\s+कोल|पासे|पाशे)"
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
-RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])[ \t]*[:\-.]?[ \t]*([A-Z][\w]*(?:[ \t]+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)[ \t]*[:\-]?[ \t]*([{DEVA}]+(?:[ \t]+[{DEVA}]+){{0,2}})")
-RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
+RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])[ \t]*[:\-.]?[ \t]*([A-Z][\w]*(?:[ \t]+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)[ \t]*[:\-]?[ \t]*([{DEVA}]+(?:[ \t]+[{DEVA}]+){{0,2}})|\b([A-Z][a-z]{{3,}}(?:\s+[A-Z][a-z]{{3,}})?)\s+Post\b")
+RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[\"']?\s*[:\-=]?\s*[\"']?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-\"'(])([1-8]\d{2})\s?(\d{3})(?=[\"'\s),;\]}\n]|$)")
 RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
                     rf"|(?<![\w.x×])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
-RX_URL = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+|\burn:(?:uuid|oid):[\w.\-]+")
-RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|y|वर्ष|साल|saal|sal)\b\.?(?:\s*old)?)(?=\s*[,/|;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|पुरुष|महिला|$|,|\||/|\)|;))")
+RX_URL = re.compile(r"(?i)\b(?:https?://|wa\.me/)[^\s\"'<>,;)]+|\btel:[+\d()\- ]{5,22}\d|\burn:(?:uuid|oid):[\w.\-]+")
+RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|y|वर्ष|साल|saal|sal|vayas\w*|prayam)\b\.?(?:\s*old)?)(?=\s*[,/|;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|purushan|stree|sthree|पुरुष|महिला|$|,|\||/|\)|;))")
 RX_PRE_KIN = re.compile(rf"(?i)(?:^|(?<=[\n,;|(\[]))\s*({NAME_SEQ}),\s*(?=(?:S/O|D/O|W/O|H/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of)\b)")
 RX_PRE_PAREN_KIN = re.compile(rf"(?<![A-Za-z/])({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\(\s*(?i:S/O|D/O|W/O|H/O|C/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of|पुत्र|पुत्री|पत्नी|पति|बेटा|बेटी)\.?\s*[:\-]?\s*({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\)")
-RX_KIN_POSS = re.compile(rf"(?i)\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|श्रीमती)\s+({NAME_SEQ})'s\s+(?:wife|husband|son|daughter|father|mother)\b")
-RX_KIN = re.compile(rf"(?i)\b({L.KIN})\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
+RX_KIN_POSS = re.compile(rf"(?i)(?:\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|श्रीमती)\s+|(?<=,\s))({NAME_SEQ})(?:'s|-?nte)\s+(?:wife|husband|son|daughter|father|mother|makan|makal|bharya|bharthavu)\b")
+RX_KIN = re.compile(rf"(?i)\b({L.KIN})(?![A-Za-z{DEVA}])\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
 RX_HON_AFTER = re.compile(rf"({NAME_SEQ})(\s+(?i:{L.HONORIFIC_AFTER}))\b")
 RX_HON_BEFORE = re.compile(rf"\b({L.HONORIFIC_BEFORE})\s+({NAME_SEQ})")
@@ -312,6 +313,7 @@ _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
                          rf"handed\s+over\s+to|superseded\s+record|old\s+record|merged\s+record|"
+                         rf"printed\s+(?:for|by)|copy\s+(?:sent\s+to|to|ayachu|bheja)|sent\s+to|pehle|earlier|formerly|old\s+name|merged[_\s]+from|"
                          rf"(?:copied|taken|cloned|extracted)\s+from(?:\s+the)?(?:\s+(?:chart|record|file|note))?\s+of|"
                          rf"(?:duplicate|duplicated|copy)\s+(?:(?:chart|record|file|note)\s+)?of|"
                          rf"previously\s+registered\s+as|shikayatkarta|shikayatkarta|complainant|aavedak|avedak|prarthi|informant|caller\s*name|"
@@ -325,7 +327,8 @@ RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}}
 NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{1,3}})")
 RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.?\s*(?:No|Number|#)|IP\s*No|IPD\s*No|OPD\s*No|"
                          r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Record\s*No|File\s*No|"
-                         r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?)|UID|Aadhaar|Aadhar|ABHA)\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
+                         r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?)|UID|Aadhaar|Aadhar|ABHA|"
+                         r"Ration(?:\s*Card)?|KASP|Chirayu|PPP\s*(?:ID|No))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
                           rf"mother|brother|sister|guardian|neighbour|friend|raahgir|rahgir|padosi|padosan|rishtedaar|rishtedar|mitra|dost|saathi|"
                           rf"gawah|beta|beti|bhai|behen|bahan|pati|patni|maa|pita|chacha|chachi|mama|mami|bua|nana|nani|dada|dadi|"
@@ -437,13 +440,43 @@ _URL_PII_KEYS = {"patient", "pt", "name", "naam", "mr", "mrn", "uhid", "id", "pi
 
 
 def _scrub_url(url: str, ctx: Ctx, sw: Sweeper, put) -> str:
-    if url.lower().startswith("urn:"):
+    low = url.lower()
+    if low.startswith("urn:"):
         return put(url)
+    if low.startswith("tel:"):
+        ctx.stats["identifiers"] += 1
+        return put("tel:[PHONE]")
     base, sep, query = url.partition("?")
-    host_part = base.split("://", 1)[1].split("/", 1)[0].lower() if "://" in base else ""
-    if any(host_part == h or host_part.endswith("." + h) for h in _SAFE_URL_HOSTS):
+    host_part = base.split("://", 1)[1].split("/", 1)[0].lower() if "://" in base else base.split("/", 1)[0].lower()
+    if "://" in base and any(host_part == h or host_part.endswith("." + h) for h in _SAFE_URL_HOSTS):
         return put(url)
     # Scrub PII inside URL path segments (beyond scheme+host) and query parameters
+    if "://" in base:
+        scheme, _, after = base.partition("://")
+        host, psep, ptail = after.partition("/")
+        head = f"{scheme}://{host}"
+    else:
+        head, psep, ptail = base.partition("/")
+    if psep and ptail:
+        new_segs = []
+        for seg in ptail.split("/"):
+            if not seg:
+                new_segs.append(seg)
+                continue
+            cand = unquote_plus(seg)
+            dk = classify_digits(cand)
+            if dk:
+                ctx.stats["identifiers"] += 1
+                new_segs.append(f"[{dk}]")
+                continue
+            s2 = sw.rx_lat_full.sub("[NAME]", sw.rx_ids.sub(ctx.psn or "[ID]", cand))
+            s2 = RX_IDTOK.sub(lambda m: (ctx.psn or "[ID]") if id_digits_ok(m.group(0)) else m.group(0), s2)
+            if s2 != cand:
+                ctx.stats["identifiers"] += 1
+                new_segs.append(s2)
+            else:
+                new_segs.append(seg)
+        base = head + "/" + "/".join(new_segs)
     if query:
         parts = []
         for pair in query.split("&"):
@@ -521,8 +554,11 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return f
 
     if allow_b64:
-        t = RX_B64.sub(lambda m: put(b64_scrub(m.group(0), ctx, sw)), t)
-        t = RX_HEX.sub(lambda m: put(hex_scrub(m.group(0), ctx, sw)), t)
+        def _put_if_changed(fn, m):
+            s = fn(m.group(0), ctx, sw)
+            return put(s) if s != m.group(0) else m.group(0)
+        t = RX_B64.sub(lambda m: _put_if_changed(b64_scrub, m), t)
+        t = RX_HEX.sub(lambda m: _put_if_changed(hex_scrub, m), t)
 
     # 1. labelled address lines -> district level only
     def addr(m):
@@ -712,11 +748,11 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t = RX_LANDMARK.sub(red("[LANDMARK]"), t)
 
     def vill(m):
-        g = 1 if m.group(1) else 2
-        if m.group(g).strip().lower() in ("mohalla", "locality", "name", "type", "ward", "tehsil"):
+        g = 1 if m.group(1) else (2 if m.group(2) else 3)
+        if m.group(g).strip().lower() in ("mohalla", "locality", "name", "type", "ward", "tehsil", "the", "near", "in", "of", "on"):
             return m.group(0)
         st["identifiers"] += 1
-        return m.group(0)[: m.start(g) - m.start(0)] + put("[VILLAGE]")
+        return m.group(0)[: m.start(g) - m.start(0)] + put("[VILLAGE]") + m.group(0)[m.end(g) - m.start(0):]
     t = RX_VILL.sub(vill, t)
     t = sw.rx_place.sub(red("[PLACE]"), t)
 
@@ -728,8 +764,12 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t = RX_DEVA_VILLAGE.sub(dvill, t)
 
     def pin(m):
-        if not m.group(1) and re.search(r"\d[\d.,]*\s*-\s*$", m.string[max(0, m.start() - 16):m.start()]):
-            return m.group(0)          # upper bound of a numeric range (e.g. 150000-410000), not a PIN
+        if not m.group(1) and re.search(
+            r"(?:\d[\d.,]*\s*-\s*$|\b(?:platelets?|wbc|rbc|tlc|counts?|cells?|viral|copies)\s*[:\-=]?\s*$)",
+            m.string[max(0, m.start() - 24):m.start()],
+            re.I,
+        ):
+            return m.group(0)          # upper bound of a numeric range (e.g. 150000-410000) or cell count, not a PIN
         st["identifiers"] += 1
         g = 1 if m.group(1) else 3
         keep = ctx.rule is None or ctx.rule.pin != "drop"

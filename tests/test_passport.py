@@ -32,6 +32,25 @@ class PassportTests(unittest.TestCase):
             self.assertLess(bad["clinical"]["protected_values_kept_pct"], 100.0)
             self.assertEqual(len(bad["residual_risks"]), 2)
 
+    def test_duplicate_sha_physical_files_counted_individually(self):
+        with tempfile.TemporaryDirectory() as d:
+            inp, out = Path(d) / "in", Path(d) / "out"
+            (inp / "sub").mkdir(parents=True)
+            csv_body = "UHID,Patient Name,Mobile\nAB-2001,Kavitha Ramesh,9876543210\n"
+            (inp / "reg.csv").write_text(csv_body, encoding="utf-8")
+            (inp / "sub" / "reg_copy.csv").write_text(csv_body, encoding="utf-8")
+            subprocess.run([sys.executable, str(ROOT / "main.py"), "--input", str(inp), "--output", str(out)],
+                           check=True, capture_output=True, env={**os.environ, "RAKSHA_SECRET": "t" * 32})
+            clean = V.audit(inp, out)
+            st = clean["structural"]
+            self.assertEqual(st["input_files"], 2)
+            self.assertEqual(st["accounted_in_report"], 2)
+            self.assertEqual(st["exported"], 2)
+            self.assertTrue(st["report_counts_consistent"])
+            rendered = json.dumps(clean) + V.render_html(clean, None)
+            self.assertNotIn("Kavitha Ramesh", rendered)
+            self.assertNotIn("9876543210", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

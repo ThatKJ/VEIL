@@ -29,7 +29,7 @@ from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ, STOP_WORDS
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
                ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".hl7", ".rtf", ".odt", ".ppt", ".pptx",
                ".heic", ".webp", ".mp3", ".mp4", ".wav"}
-ID_KINDS = {"MRN", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE"}
+ID_KINDS = {"MRN", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE", "FAMILY_ID"}
 STRUCT_KEYS = {"resourceType", "id", "fullUrl", "reference", "system", "url", "profile", "status", "type", "use",
                "mode", "contentType", "language", "coding", "code", "unit", "versionId", "schema",
                "loinc", "interpretation", "category", "intent", "priority", "valueQuantity", "comparator"}
@@ -46,7 +46,7 @@ class Stats(dict):
 class FileJob:
     __slots__ = ("rel", "raw", "sha", "ext", "kind", "text", "data", "delim", "rows", "order", "recs", "status",
                  "reason", "out_rel", "bom", "crlf", "indent", "doc_rec", "colkinds", "rec_ptrs", "branches",
-                 "out_locs", "preamble", "widths", "repeat_headers", "keyed")
+                 "out_locs", "preamble", "widths", "repeat_headers", "keyed", "eav", "col_map", "str_records")
 
     def __init__(self, rel, raw):
         self.rel, self.raw = rel, raw
@@ -70,6 +70,9 @@ class FileJob:
         self.widths = []
         self.repeat_headers = set()
         self.keyed = set()
+        self.eav = None
+        self.col_map = {}
+        self.str_records = set()
 
 
 # ================================================================ field kinds
@@ -144,6 +147,11 @@ def shape_kind(values: list[str]) -> str | None:
 
 
 # ================================================================ evidence helpers
+_INLINE_KV_CELL = re.compile(
+    r"(?i)^\s*(?:thamasa\s*sthalam|address|pata|vilasam|melvilasam|fon|phone|veedu\s*fon|ration|kasp|aadhaar|abha|dob|janana)\s*[:：\-]"
+)
+
+
 def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, order: str = "dmy"):
     if v is None or v == "":
         return
@@ -151,14 +159,23 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     if not s:
         return
     e = rec.ev
-    if kind in ("NAME", "REL_NAME") and re.match(r"(?i)\s*(?:dr|sr|sister|nurse|staff\s+nurse|anm|gnm|s/n)\b\.?", s):
+    if kind in ("NAME", "REL_NAME") and re.match(r"^(?:(?i:dr|sr|sis\.?|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+|(?:DEO|N/O)\s+)", s):
         return                      # clinical staff, not a patient or relative
-    if kind in ("NAME", "REL_NAME") and (len(re.sub(r"\D", "", s)) >= 3 or (RX_IDTOK.fullmatch(s) and id_digits_ok(s))):
+    if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
+        text_evidence(s, rec, H, order)
+        return
+    _looks_addr = bool("," in s or re.search(r"(?i)\b(?:door|house|road|street|lane|ward|pin|near|opp|vill|post|dist|tk|dt)\b", s)
+                       or (len(s) > 36 and re.search(r"\d", s)))
+    _code_id = bool(re.fullmatch(r"[A-Z]{2,8}[\s/\-\d#:.]{3,24}", s) and re.search(r"\d{3}", s))
+    if kind in ("NAME", "REL_NAME") and ((not _looks_addr and len(s) <= 28 and len(s.split()) <= 2) or _code_id) and (len(re.sub(r"\D", "", s)) >= 3 or (RX_IDTOK.fullmatch(s) and id_digits_ok(s))):
         kind = "MRN" if kind == "NAME" else None      # an ID-shaped value is never a person name
         if kind is None:
             return
+    if kind in ("NAME", "REL_NAME") and _looks_addr:
+        text_evidence(s, rec, H, order)
+        return
     if kind == "NAME":
-        kin_m = re.search(rf"(?i)(?:\n|\s+)(?:{L.KIN})\.?\s*[:\-]?\s*(.+)$", s)
+        kin_m = re.search(rf"(?i)(?:\n|\s+)\b({L.KIN})(?![A-Za-z{DEVA}])\.?\s*[:\-]?\s*(.+)$", s)
         pt_part = s[:kin_m.start()].strip() if kin_m else s
         rel_part = kin_m.group(1).strip() if kin_m else None
         H.add_name(pt_part)
@@ -177,6 +194,8 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
         toks = [t for t in re.split(r"[\s,]+", re.sub(r"(?i)\b(?:S/O|D/O|W/O|H/O|C/O|Dikri|Patni|Puttar)\b\.?\s*\-?", " ", rp)) if t]
         if toks:
             e["rel"].append(toks)
+    elif kind == "FAMILY_ID":
+        H.add_id(s)
     elif kind == "MRN":
         H.add_id(s)
         a = re.sub(r"[^0-9A-Za-z]", "", s).upper()
@@ -234,8 +253,46 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
 
 RX_KV = re.compile(r"(?m)^([ \t]*\|[ \t]*)([^|\n]{1,40}?)([ \t]*\|[ \t]*)([^|\n]+?)([ \t]*\|[ \t]*)$"
                    r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:=\n|]{0,30}?)(\**[ \t]*[:：=][ \t]*\**)([^\n]+?)([ \t]*)$")
-KV_KINDS = {"NAME", "REL_NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "DOB", "AGE", "VILLAGE",
-            "ADDRESS", "PIN"}
+KV_KINDS = {"NAME", "REL_NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "FAMILY_ID", "DOB", "AGE",
+            "VILLAGE", "ADDRESS", "PIN"}
+
+_RX_STRUCT_BLOCK = re.compile(r"(-----BEGIN STRUCTURED-----\s*\n)(.*?)(\n\s*-----END STRUCTURED-----)", re.S)
+
+
+def _parse_json_str(v):
+    if not isinstance(v, str) or len(v) > 20_000:
+        return None
+    s = v.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return None
+    try:
+        o = json.loads(s)
+    except (ValueError, RecursionError):
+        return None
+    return o if isinstance(o, dict) and json_depth(o) <= 16 else None
+
+
+_COL_MAP_KEY = re.compile(r"(?i)^(?:col(?:umn)?_?(?:codes?|maps?|names?|labels?)|field_?(?:codes?|maps?)|headers?|schema_?map)$")
+
+
+def _extract_col_map(node) -> dict[str, str]:
+    if not isinstance(node, dict):
+        return {}
+    out: dict[str, str] = {}
+    for mk, mv in node.items():
+        if not (isinstance(mk, str) and isinstance(mv, dict) and 2 <= len(mv) <= 200):
+            continue
+        items = [(k, v) for k, v in mv.items() if isinstance(k, str) and isinstance(v, str)]
+        if len(items) != len(mv):
+            continue
+        # Only accept schema-named codebooks or code-shaped keys whose values look like short field names (no digits/phones/prose).
+        explicit = bool(_COL_MAP_KEY.match(mk))
+        coded_keys = all(re.fullmatch(r"[A-Za-z]{1,4}\d{1,3}|col_?\w{1,8}", k) for k, _ in items)
+        clean_vals = all(len(v) <= 32 and not re.search(r"[:/@\d]", v) for _, v in items)
+        if (explicit or coded_keys) and clean_vals and sum(kind_of_key(v) is not None for _, v in items[:30]) >= 2:
+            for k, v in items:
+                out[k] = v
+    return out
 
 
 def _kv_kind(label: str, value: str):
@@ -273,7 +330,25 @@ _PAT_HON_RX = re.compile(
 )
 
 
+_RX_SQL_INS = re.compile(r"(?i)\bINSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES\s*\(([^;]+)\)")
+
+
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
+    po = _parse_json_str(text)
+    if po is not None:
+        walk_evidence(po, None, rec, H, order)
+        return
+    for bm in _RX_STRUCT_BLOCK.finditer(text):
+        bp = _parse_json_str(bm.group(2))
+        if bp is not None:
+            walk_evidence(bp, None, rec, H, order)
+    for sm in _RX_SQL_INS.finditer(text):
+        cols = [c.strip(" `\"'") for c in sm.group(1).split(",")]
+        vals = [a or b or c for a, b, c in re.findall(r"'((?:\\.|[^'])*)'|\"((?:\\.|[^\"])*)\"|([^,\s]+)", sm.group(2))]
+        for col, val in zip(cols, vals):
+            ck = kind_of_key(col)
+            if ck and ck not in ("DOCTOR", "SAFE", "STRUCT", "RELATION", "DATE", "PIN"):
+                add_ev(rec, H, ck, val, order=order)
     e = rec.ev
     for lab, val, _, _ in kv_rows(text):
         k = _kv_kind(lab, val)
@@ -497,24 +572,34 @@ _NON_PATIENT_KEYS = {"result", "results", "tests", "panels", "loinc", "unit", "r
 _DOSE_SHAPE = re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|iu|units?|%)\b|\b(?:tab|cap|inj|syp|syrup)\.?\s")
 
 
-def _patient_list(v) -> bool:
-    """A list of objects whose items carry patient evidence (judged by the evidence extractor itself)."""
-    if not (isinstance(v, list) and v and all(isinstance(x, dict) for x in v)):
+def _patient_list(v, col_map: dict[str, str] | None = None) -> bool:
+    """A list of objects (or JSON-encoded objects) whose items carry patient evidence."""
+    if not (isinstance(v, list) and v):
         return False
-    vals = [x.get(k) for x in v[:12] for k in x if kind_of_key(k) == "NAME" and isinstance(x.get(k), str)]
+    objs = []
+    for x in v[:12]:
+        if isinstance(x, dict):
+            objs.append(x)
+        else:
+            po = _parse_json_str(x)
+            if po is None:
+                return False
+            objs.append(po)
+    cmap = col_map or {}
+    vals = [x.get(k) for x in objs for k in x if kind_of_key(cmap.get(k, k)) == "NAME" and isinstance(x.get(k), str)]
     if vals and sum(1 for x in vals if _DOSE_SHAPE.search(x)) >= 0.5 * len(vals):
         return False             # a medication / order list ({"name": "Tab Metformin 500 mg"}), not patients
     hits = 0
-    sample = v[:12]
-    for x in sample:
+    for x in objs:
         r = Rec("", "")
-        walk_evidence(x, None, r, Harvest(), "dmy")
+        walk_evidence(x, None, r, Harvest(), "dmy", col_map=col_map)
         e = r.ev
         has_strong = bool(e["ids"] or e["phones"] or e["dob"])
-        has_clin_shape = any(k.lower() in _NON_PATIENT_KEYS for k in x) and not (has_strong or e["rel"] or e["age"] is not None or e["gender"])
+        has_clin_shape = (any(cmap.get(k, k).lower() in _NON_PATIENT_KEYS for k in x)
+                          and not (has_strong or e["rel"] or e["age"] is not None or e["gender"]))
         if (e["names"] and not has_clin_shape) or has_strong:
             hits += 1
-    return hits >= max(1, len(sample) // 2)
+    return hits >= max(1, len(objs) // 2)
 
 
 def _field_columns(items):
@@ -673,9 +758,10 @@ def _pointer(path):
     return "".join("/" + str(x).replace("~", "~0").replace("/", "~1") for x in path) or "doc"
 
 
-def _direct_patient(obj):
+def _direct_patient(obj, col_map: dict[str, str] | None = None):
+    cmap = col_map or {}
     return isinstance(obj, dict) and any(
-        kind_of_key(k) in {"NAME", "MRN", "AADHAAR", "ABHA"} and isinstance(v, (str, int))
+        kind_of_key(cmap.get(k, k)) in {"NAME", "MRN", "AADHAAR", "ABHA"} and isinstance(v, (str, int))
         for k, v in obj.items())
 
 
@@ -684,6 +770,10 @@ def json_records(node, job, path=()):
     own patient fields owns its encounters unless those encounters identify patients."""
     if not isinstance(node, (dict, list)):
         return
+    if isinstance(node, dict):
+        lmap = _extract_col_map(node)
+        if lmap:
+            job.col_map.update(lmap)
     if isinstance(node, dict) and node.get("resourceType") == "Bundle":
         entries = node.get("entry", [])
         if isinstance(entries, list):
@@ -705,18 +795,25 @@ def json_records(node, job, path=()):
         for i, row in enumerate(node[k]):
             yield path + (k, i), row, header
         return
+    cmap = job.col_map or None
     keyed = _patient_map(node)
-    bearing = keyed or _patient_list(node)
+    bearing = keyed or _patient_list(node, cmap)
     if keyed:
         job.keyed.add(path)
     parts = node.items() if isinstance(node, dict) else enumerate(node)
     for k, item in parts:
+        subpath = path + (k,)
+        if isinstance(item, str) and bearing:
+            po = _parse_json_str(item)
+            if po is not None:
+                job.str_records.add(subpath)
+                yield subpath, po, None
+                continue
         if not isinstance(item, (dict, list)):
             continue
-        if isinstance(k, str) and kind_of_key(k) == "DOCTOR":
+        if isinstance(k, str) and kind_of_key((cmap or {}).get(k, k)) == "DOCTOR":
             continue          # staff / care-team sub-maps never own patient records
-        subpath = path + (k,)
-        if bearing and _direct_patient(item):
+        if bearing and _direct_patient(item, cmap):
             yield subpath, item, None
             continue
         nested = list(json_records(item, job, subpath))
@@ -736,15 +833,63 @@ def _metadata(node, path, job):
     return [_metadata(v, path + (i,), job) for i, v in enumerate(node)]
 
 
+_SAFE_CSV_HDRS = {"id", "sr", "no", "value", "val", "test", "unit", "range", "diagnosis", "result",
+                  "khana", "keemat", "field", "attribute", "remark", "remarks", "note", "notes"}
+_EAV_ATTR = {"key", "field", "fieldname", "attr", "attribute", "khana", "label", "param", "parameter"}
+_EAV_VAL = {"val", "value", "data", "content", "keemat", "kimat"}
+
+
+def _eav_cell_kind(attr: str) -> str | None:
+    toks = set(L.key_tokens(attr))
+    k = kind_of_key(attr)
+    if toks & GENDER_TOK and k != "AGE":
+        return "GENDER"
+    if toks & DISTRICT_TOK:
+        return "DISTRICT"
+    if toks & TEHSIL_TOK:
+        return "TEHSIL"
+    if toks & COND_TOK:
+        return "COND"
+    return k
+
+
+def _hdr_known(row) -> int:
+    return sum(1 for c in row if c.strip() and (kind_of_key(c) is not None or c.strip().lower() in _SAFE_CSV_HDRS))
+
+
+def _is_super_header(rows) -> bool:
+    if len(rows) < 3 or len(rows[0]) <= 1 or len(rows[0]) != len(rows[1]) or len(rows[0]) < 3:
+        return False
+    b0 = sum(1 for c in rows[0] if not c.strip())
+    b1 = sum(1 for c in rows[1] if not c.strip())
+    k0, k1 = _hdr_known(rows[0]), _hdr_known(rows[1])
+    return b0 >= 2 and b1 == 0 and k1 > k0 and k1 >= 2 and not any(re.search(r"\d{3,}", c) for c in rows[1])
+
+
 def _table_header(rows):
     """Find the start of a rectangular table following short report metadata."""
-    if len(rows) < 3 or len(rows[0]) > 1:
+    if len(rows) < 3:
         return 0
+    if len(rows[0]) > 1:
+        if _is_super_header(rows):
+            return 0
+        k0 = _hdr_known(rows[0])
+        if k0 >= 2:
+            return 0
+        for i in range(1, min(len(rows) - 1, 64)):
+            width = len(rows[i])
+            if width >= 2 and len(rows[i + 1]) == width and all(h.strip() for h in rows[i]) and _hdr_known(rows[i]) >= 2 and _hdr_known(rows[i]) > k0:
+                return i
+        return 0
+    first_rect = None
     for i in range(1, min(len(rows) - 1, 64)):
         width = len(rows[i])
         if width >= 2 and len(rows[i + 1]) == width and all(h.strip() for h in rows[i]):
-            return i
-    return 0
+            if _hdr_known(rows[i]) >= 2:
+                return i
+            if first_rect is None:
+                first_rect = i
+    return first_rect or 0
 
 
 def _fixed_rows(text):
@@ -765,8 +910,10 @@ def _fixed_rows(text):
     return [[line[a:b].strip() for a, b in bounds] for line in lines], starts
 
 
-def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
+def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, col_map: dict[str, str] | None = None):
     if isinstance(obj, dict):
+        lmap = _extract_col_map(obj)
+        cmap = {**(col_map or {}), **lmap} if lmap else col_map
         rk = res_kind
         rt = obj.get("resourceType")
         if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService"):
@@ -778,8 +925,10 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
         base = rk if rk else kind
         ext_kind = ext_value_kind(obj)
         for k, v in obj.items():
-            ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
-            if (k == "gender" or set(L.key_tokens(k)) & GENDER_TOK) and ck != "AGE":
+            eff_k = cmap.get(k, k) if cmap else k
+            ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base)
+            toks = set(L.key_tokens(eff_k))
+            if (eff_k == "gender" or toks & GENDER_TOK) and ck != "AGE":
                 g = gender_of(v) if isinstance(v, str) else None
                 if g:
                     rec.ev["gender"] = g
@@ -788,29 +937,29 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
                 gm = re.search(r"(?i)/\s*([MF])\b", v)
                 if gm:
                     rec.ev["gender"] = gm.group(1).upper()
-            if set(L.key_tokens(k)) & DISTRICT_TOK and isinstance(v, str):
+            if toks & DISTRICT_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
                 rec.ev.setdefault("district", v)
                 continue
-            if set(L.key_tokens(k)) & TEHSIL_TOK and isinstance(v, str):
+            if toks & TEHSIL_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
                 continue
-            if set(L.key_tokens(k)) & COND_TOK and isinstance(v, str):
+            if toks & COND_TOK and isinstance(v, str):
                 rec.ev.setdefault("conds", set()).add(norm(v))
-            walk_evidence(v, ck, rec, H, order, rk)
+            walk_evidence(v, ck, rec, H, order, rk, cmap)
     elif isinstance(obj, list):
         cols = _field_columns(obj)
         if cols:
             label, value = cols
             for item in obj:
-                walk_evidence({item[label]: item[value]}, kind, rec, H, order, res_kind)
+                walk_evidence({item[label]: item[value]}, kind, rec, H, order, res_kind, col_map)
             return
         if _pairs(obj):
             for lab, val in obj:
-                walk_evidence({lab: val}, kind, rec, H, order, res_kind)
+                walk_evidence({lab: val}, kind, rec, H, order, res_kind, col_map)
             return
         for x in obj:
-            walk_evidence(x, kind, rec, H, order, res_kind)
+            walk_evidence(x, kind, rec, H, order, res_kind, col_map)
     elif isinstance(obj, (str, int, float)) and not isinstance(obj, bool):
         if kind == "DATE":
             if isinstance(obj, str) and not rec.ev["date"]:
@@ -822,7 +971,11 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
             return
         if kind in (None, "SAFE"):
             if isinstance(obj, str) and len(obj) > 3:
-                text_evidence(obj, rec, H, order)
+                po = _parse_json_str(obj)
+                if po is not None:
+                    walk_evidence(po, None, rec, H, order, res_kind, col_map)
+                else:
+                    text_evidence(obj, rec, H, order)
             return
         if kind == "COND" and isinstance(obj, str):
             rec.ev.setdefault("conds", set()).add(norm(obj))
@@ -898,16 +1051,16 @@ def pass1(job: FileJob, H: Harvest):
             job.kind = "json"
             for path, item, hdr in json_records(job.data, job):
                 r = Rec(job.rel, _pointer(path))
-                walk_evidence(_row_dict(hdr, item) if hdr else item, None, r, H, job.order)
+                walk_evidence(_row_dict(hdr, item) if hdr else item, None, r, H, job.order, col_map=job.col_map or None)
                 job.recs.append(r)
                 job.rec_ptrs[path] = (r, hdr)
                 job.branches.update(path[:i] for i in range(len(path)))
             if job.rec_ptrs:
                 meta = Rec(job.rel, "@meta")
-                walk_evidence(_metadata(job.data, (), job), None, meta, H, job.order)
+                walk_evidence(_metadata(job.data, (), job), None, meta, H, job.order, col_map=job.col_map or None)
             else:
                 r = Rec(job.rel, "doc")
-                walk_evidence(job.data, None, r, H, job.order)
+                walk_evidence(job.data, None, r, H, job.order, col_map=job.col_map or None)
                 job.recs.append(r)
                 job.doc_rec = r
         elif kind == "table":
@@ -922,7 +1075,8 @@ def pass1(job: FileJob, H: Harvest):
             job.preamble, job.rows = job.rows[:start], job.rows[start:]
             if not job.rows:
                 raise ValueError("empty_table")
-            header = job.rows[0]
+            super_hdr = _is_super_header(job.rows)
+            header = job.rows[1] if super_hdr else job.rows[0]
             kinds = []
             for ci, h in enumerate(header):
                 k = kind_of_key(h)
@@ -934,19 +1088,30 @@ def pass1(job: FileJob, H: Harvest):
                 elif toks & TEHSIL_TOK:
                     k = "TEHSIL"
                 if k in (None, "SAFE"):
-                    sk = shape_kind([r[ci] for r in job.rows[1:] if ci < len(r)])
+                    sk = shape_kind([r[ci] for r in job.rows[(2 if super_hdr else 1):] if ci < len(r)])
                     if sk:
                         k = sk
                 kinds.append(k)
             job.colkinds = kinds
+            attr_ci = next((ci for ci, h in enumerate(header) if h.strip().lower() in _EAV_ATTR), None)
+            val_ci = next((ci for ci, h in enumerate(header) if h.strip().lower() in _EAV_VAL), None)
+            if attr_ci is not None and val_ci is not None and attr_ci != val_ci:
+                job.eav = (attr_ci, val_ci)
             for i, row in enumerate(job.rows[1:]):
                 r = Rec(job.rel, f"row:{i}")
-                if row == header or not any(v.strip() for v in row):
+                if (super_hdr and i == 0) or row == header or not any(v.strip() for v in row):
                     job.repeat_headers.add(i)
                     job.recs.append(r)
                     continue
+                if len(row) != len(kinds):
+                    for v in row:
+                        if len(v.strip()) > 3:
+                            text_evidence(v, r, H, job.order)
+                    job.recs.append(r)
+                    continue
+                attr_v = row[job.eav[0]] if job.eav else None
                 for ci, v in enumerate(row):
-                    k = kinds[ci] if ci < len(kinds) else None
+                    k = (_eav_cell_kind(attr_v) or kinds[ci]) if (job.eav and ci == job.eav[1] and attr_v is not None) else kinds[ci]
                     if k == "GENDER":
                         r.ev["gender"] = gender_of(v)
                     elif k == "DISTRICT":
@@ -954,6 +1119,8 @@ def pass1(job: FileJob, H: Harvest):
                         r.ev["district"] = v
                     elif k == "TEHSIL":
                         H.safe_places.add(norm(v))
+                    elif k == "COND" and v.strip():
+                        r.ev.setdefault("conds", set()).add(norm(v))
                     elif k == "NAME_SHAPE":
                         H.add_name(v)
                     elif k in (None, "SAFE"):
@@ -1037,11 +1204,15 @@ class Rewriter:
         s = v
         if not s.strip():
             return s
+        if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
+            return scrub_text(kv_rewrite(s, self, ctx, rec), ctx, self.sw)
         if kind == "NAME":
-            if re.match(r"(?i)^\s*(?:dr|sr|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+", s):
+            if re.match(r"^(?:(?i:dr|sr|sis\.?|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+|(?:DEO|N/O)\s+)", s):
                 return s
             st["identifiers"] += 1
-            if len(re.sub(r"\D", "", s)) >= 3:
+            if (len(re.sub(r"\D", "", s)) >= 3 and "," not in s and len(s.split()) <= 2) or (
+                re.fullmatch(r"[A-Z]{2,8}[\s/\-\d#:.]{3,24}", s) and re.search(r"\d{3}", s)
+            ):
                 return ctx.psn or "[ID]"
             return ctx.patient_token
         if kind == "REL_NAME":
@@ -1057,6 +1228,9 @@ class Rewriter:
         if kind == "MRN":
             st["identifiers"] += 1
             return ctx.psn or "[ID]"
+        if kind == "FAMILY_ID":
+            st["identifiers"] += 1
+            return "[ID]"
         if kind in ("AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE"):
             st["identifiers"] += 1
             return f"[{kind}]"
@@ -1110,13 +1284,17 @@ class Rewriter:
         if kind == "NAME_SHAPE":
             st["identifiers"] += 1
             return "[NAME]"
+        if kind in (None, "SAFE", "COND"):
+            po = _parse_json_str(s)
+            if po is not None:
+                return json.dumps(self.walk(po, None, ctx, rec), ensure_ascii=False)
         if kind is None and NAME_VALUE.fullmatch(s.strip()) and _name_ok(s.split()) and len(s.split()) >= 2:
             st["identifiers"] += 1
             return "[NAME]"
         return scrub_text(s, ctx, self.sw)
 
     def key(self, k: str, ctx: Ctx, seen: set) -> str:
-        if k in STRUCT_KEYS or self.schema_key(k):
+        if k in STRUCT_KEYS or self.schema_key(k) or (re.fullmatch(r"\d{8}", k) and parse_date(k, "dmy")):
             seen.add(k)
             return k
         nk = scrub_text(k, ctx, self.sw)
@@ -1164,10 +1342,12 @@ class Rewriter:
         spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
         return not (self.sw.rx_lat_full.search(spaced) or self.sw.rx_ids.search(k))
 
-    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None, depth: int = 0):
+    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None, depth: int = 0, col_map: dict[str, str] | None = None):
         if depth > MAX_JSON_DEPTH:
             raise ValueError("too_deep")
         if isinstance(obj, dict):
+            lmap = _extract_col_map(obj)
+            cmap = {**(col_map or {}), **lmap} if lmap else col_map
             rk = res_kind
             rt = obj.get("resourceType")
             if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService"):
@@ -1181,49 +1361,58 @@ class Rewriter:
             out, seen = {}, set()
             is_fhir_patient = rt == "Patient"
             for k, v in obj.items():
-                ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
-                if is_fhir_patient and k == "birthDate" and ctx.rule is not None and ctx.rule.dob == "year_drop":
+                eff_k = cmap.get(k, k) if cmap else k
+                ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base)
+                if (lmap and isinstance(v, dict) and len(v) >= 2
+                        and all(isinstance(a, str) and isinstance(b, str) and lmap.get(a) == b for a, b in v.items())):
+                    ck = "STRUCT"
+                if is_fhir_patient and eff_k == "birthDate" and ctx.rule is not None and ctx.rule.dob == "year_drop":
                     self.st["identifiers"] += 1
                     self.st["generalized"] += 1
                     continue
-                toks = set(L.key_tokens(k))
+                toks = set(L.key_tokens(eff_k))
                 if toks & GENDER_TOK and not isinstance(v, (dict, list)) and ck != "AGE":
                     ck = "GENDER"
                 elif toks & DISTRICT_TOK and isinstance(v, str):
                     ck = "DISTRICT"
                 elif toks & TEHSIL_TOK and isinstance(v, str):
                     ck = "TEHSIL"
-                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk, depth + 1)
+                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk, depth + 1, cmap)
             return out
         if isinstance(obj, list):
             cols = _field_columns(obj)
             if cols:
                 label, value = cols
                 return [{label: self.key(item[label], ctx, set()),
-                         value: self.walk(item[value], child_kind(item[label], kind), ctx, rec, res_kind, depth + 1)}
+                         value: self.walk(item[value], child_kind(item[label], kind), ctx, rec, res_kind, depth + 1, col_map)}
                         for item in obj]
             if _pairs(obj):
                 out = []
                 for lab, val in obj:
                     ck = child_kind(lab, kind) if lab not in STRUCT_KEYS else "STRUCT"
-                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind, depth + 1)])
+                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind, depth + 1, col_map)])
                 return out
-            return [self.walk(x, kind, ctx, rec, res_kind, depth + 1) for x in obj]
+            return [self.walk(x, kind, ctx, rec, res_kind, depth + 1, col_map) for x in obj]
         return self.value(obj, kind, ctx, rec)
 
 
 def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None, out_path=(), safe_path=None):
+    cmap = job.col_map or None
     if path in job.rec_ptrs:
         rec, header = job.rec_ptrs[path]
         ctx = ctx_for(rec, job)
         if safe_path is not None:
             job.out_locs[rec.loc] = (_pointer(safe_path), _pointer(out_path))
+        if path in job.str_records and isinstance(node, str):
+            po = _parse_json_str(node)
+            if po is not None:
+                return json.dumps(rw.walk(po, None, ctx, rec, col_map=cmap), ensure_ascii=False)
         if header is not None:
-            return [rw.walk(v, child_kind(str(header[i]), None) if i < len(header) else None, ctx, rec)
+            return [rw.walk(v, child_kind(str(header[i]), None) if i < len(header) else None, ctx, rec, col_map=cmap)
                     for i, v in enumerate(node)]
-        return rw.walk(node, None, ctx, rec)
+        return rw.walk(node, None, ctx, rec, col_map=cmap)
     if path not in job.branches:
-        return rw.walk(node, kind, meta_ctx, None)
+        return rw.walk(node, kind, meta_ctx, None, col_map=cmap)
     if isinstance(node, dict):
         out, seen = {}, set()
         # Some systems number rows inside an object. Preserve verified ordinals
@@ -1249,7 +1438,8 @@ def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None, out_path=(),
             else:
                 nk = rw.key(k, meta_ctx, seen)
             safe = path if nk != k and safe_path is None else safe_path
-            out[nk] = rewrite_json(rw, v, path + (k,), job, meta_ctx, ctx_for, child_kind(k, kind),
+            eff_k = cmap.get(k, k) if cmap else k
+            out[nk] = rewrite_json(rw, v, path + (k,), job, meta_ctx, ctx_for, child_kind(eff_k, kind),
                                    out_path + (nk,), safe)
         return out
     return [rewrite_json(rw, v, path + (i,), job, meta_ctx, ctx_for, kind, out_path + (i,), safe_path)
@@ -1641,7 +1831,8 @@ def run(inp: Path, out: Path, policy: dict) -> int:
     rec_digs = {d for x in rec_ids for d in (re.sub(r"\D", "", x),) if len(d) >= 5}
     rw = Rewriter(H, sw, st, policy, rec_ids=rec_ids, rec_digs=rec_digs)
     crit = sorted({n for n in H.full_names if len(n) >= 6} | {d for d in H.phones} |
-                  {d for d in H.id_digits if len(d) >= 6}, key=len, reverse=True)
+                  {d for d in H.id_digits if len(d) >= 6 and not (len(d) == 8 and parse_date(d, "dmy"))},
+                  key=len, reverse=True)
     verify_idx = build_verify_index(crit)
     maxd = int(policy.get("date_shift_max_days", 180))
 
@@ -1693,7 +1884,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                       data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
                   else:
                       r = j.doc_rec
-                      data = rw.walk(j.data, None, ctx_for(r, j), r)
+                      data = rw.walk(j.data, None, ctx_for(r, j), r, col_map=j.col_map or None)
                   result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
               if j.kind in ("jsonl", "json"):
                   pass
@@ -1714,20 +1905,26 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                   name_cols = [ci for ci, k in enumerate(j.colkinds) if k == "NAME"]
                   for i, row in enumerate(j.rows[1:]):
                       if i in j.repeat_headers:
-                          write_row(header if row == j.rows[0] else row)
+                          write_row(header if row == j.rows[0] else [scrub_text(v, hctx, sw) for v in row])
                           continue
                       r = j.recs[i]
                       c = ctx_for(r, j)
                       new_row = []
                       ragged = len(row) != len(j.colkinds)
+                      attr_v = row[j.eav[0]] if (j.eav and not ragged and j.eav[0] < len(row)) else None
                       for ci, v in enumerate(row):
                           k = j.colkinds[ci] if ci < len(j.colkinds) else None
-                          if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE"):
+                          if j.eav and not ragged and ci == j.eav[1] and attr_v is not None:
+                              k = _eav_cell_kind(attr_v) or k
+                          if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE", "FAMILY_ID"):
                               new_row.append(scrub_text(v, c, sw))
                               continue
                           if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
                               st["identifiers"] += 1
                               new_row.append("")
+                              continue
+                          if k == "COND":
+                              new_row.append(scrub_text(v, c, sw))
                               continue
                           new_row.append(rw.value(v, k, c, r))
                       write_row(new_row)
@@ -1738,7 +1935,18 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                   if RX_HL7.match(j.text):
                       result = hl7_rewrite(j.text, rw, c, r, sw)
                   else:
-                      result = scrub_text(kv_rewrite(j.text, rw, c, r), c, sw)
+                      blocks = []
+                      def _rw_struct(m):
+                          bp = _parse_json_str(m.group(2))
+                          if bp is None:
+                              return m.group(0)
+                          tag = f"@@VEILSTRUCT_{len(blocks)}@@"
+                          blocks.append((tag, m.group(1) + json.dumps(rw.walk(bp, None, c, r), ensure_ascii=False) + m.group(3)))
+                          return tag
+                      masked_t = _RX_STRUCT_BLOCK.sub(_rw_struct, j.text)
+                      result = scrub_text(kv_rewrite(masked_t, rw, c, r), c, sw)
+                      for tag, body in blocks:
+                          result = result.replace(tag, body)
                   if r is not None and r.pid and r.pid not in result:
                       result = f"Patient: {r.pid}\n" + result
               if str(policy.get("verify", "on")) != "off":     # ablation switch; always on in config

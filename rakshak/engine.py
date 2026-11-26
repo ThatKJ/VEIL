@@ -161,10 +161,10 @@ def sniff_delim(text: str, ext: str) -> str:
 
 
 _INDIC_DIGITS = str.maketrans(
-    "०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯",
-    "0123456789" * 4,
+    "०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯௦௧௨௩௪௫௬௭௮௯౦౧౨౩౪౫౬౭౮౯೦೧೨೩೪೫೬೭೮೯൦൧൨൩൪൫൬൭൮൯",
+    "0123456789" * 8,
 )
-INDIC_DIG = "0-9०-९০-৯੦-੯૦-૯"
+INDIC_DIG = "0-9०-९০-৯੦-੯૦-૯௦-௯౦-౯೦-೯൦-൯"
 
 # ============================================================== dates
 _MON = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
@@ -179,9 +179,10 @@ _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "Au
              "November", "December"]
 _ASCII_TO_DEVA = str.maketrans("0123456789", "०१२३४५६७८९")
 _DEVA_DIG_RX = re.compile(r"[\u0966-\u096F]")
-RX_DMY = re.compile(rf"(?<![{INDIC_DIG}/.\-])([{INDIC_DIG}]{{1,2}})([/\-.])([{INDIC_DIG}]{{1,2}})\2((?:19|20|१९|२०|१९|२०)[{INDIC_DIG}]{{2}}|[{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/.\-])")
-RX_ISO = re.compile(rf"(?<![{INDIC_DIG}/.\-])((?:19|20|१९|२०)[{INDIC_DIG}]{{2}})([-/.])([{INDIC_DIG}]{{2}})\2([{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/.\-])")
-RX_ISO8 = re.compile(r"(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")
+RX_DMY = re.compile(rf"(?<![{INDIC_DIG}/.\-])([{INDIC_DIG}]{{1,2}})([/\-.])([{INDIC_DIG}]{{1,2}})\2((?:19|20|१९|२०)[{INDIC_DIG}]{{2}}|[{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/\-]|\.\d)")
+RX_ISO = re.compile(rf"(?<![{INDIC_DIG}/.\-])((?:19|20|१९|२०)[{INDIC_DIG}]{{2}})([-/.])([{INDIC_DIG}]{{2}})\2([{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/\-]|\.\d)")
+RX_ISO8 = re.compile(r"(?<![A-Za-z0-9/\-#])((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?![A-Za-z0-9/\-#])")
+RX_DMY8 = re.compile(r"(?<![A-Za-z0-9/\-#])(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])((?:19|20)\d{2})(?![A-Za-z0-9/\-#])")
 RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+(?:of\s+)?)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
                       r"(,?[\s\-/.]+['’]?|['’])((?:19|20)?\d{2})\b")
 RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)([\s\-/]+)(\d{1,2})(st|nd|rd|th)?(,?[\s\-/]+)((?:19|20)\d{2})\b")
@@ -266,6 +267,22 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
             counter.append(1)
         return w(f"{n.year}{n.month:02d}{n.day:02d}")
 
+    def dmy8(m):
+        ia, ib, iy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        o = order
+        if ia > 12 and ib <= 12:
+            o = "dmy"
+        elif ib > 12 and ia <= 12:
+            o = "mdy"
+        d = _mk(iy, ib, ia) if o == "dmy" else _mk(iy, ia, ib)
+        if not d:
+            return m.group(0)
+        n = d + delta
+        first, second = (n.day, n.month) if o == "dmy" else (n.month, n.day)
+        if counter is not None:
+            counter.append(1)
+        return w(f"{first:02d}{second:02d}{n.year}")
+
     def textd(m):
         mon = _MON.get(m.group(4).lower()[:3])
         yy = m.group(7)
@@ -312,6 +329,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
     text = RX_HID.sub(hid, text)
     text = RX_ISO.sub(iso, text)
     text = RX_ISO8.sub(iso8, text)
+    text = RX_DMY8.sub(dmy8, text)
     text = RX_DMY.sub(dmy, text)
     text = RX_TEXTD.sub(textd, text)
     text = RX_TEXTM.sub(textm, text)
@@ -331,6 +349,13 @@ def parse_date(s: str, order: str) -> dt.date | None:
     m = RX_ISO8.search(s)
     if m:
         return _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = RX_DMY8.search(s)
+    if m:
+        ia, ib, iy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        o = "dmy" if ia > 12 else ("mdy" if ib > 12 else order)
+        d = _mk(iy, ib, ia) if o == "dmy" else _mk(iy, ia, ib)
+        if d:
+            return d
     m = RX_DMY.search(s)
     if m:
         a = int(m.group(1).translate(_INDIC_DIGITS))
@@ -391,7 +416,7 @@ def classify_digits(run: str) -> str | None:
     if n == 12 and groups in ([12], [4, 4, 4]) and not (d.startswith("91") and d[2] in "6789" and groups != [4, 4, 4]):
         return "AADHAAR"
     core = d[2:] if n == 12 and d.startswith("91") else d[1:] if n == 11 and d[0] == "0" else d
-    if len(core) == 10 and core[0] in "6789" and all(g >= 2 for g in groups) and max(groups) <= 10:
+    if len(core) == 10 and core[0] in "6789" and (all(g >= 2 for g in groups) or groups == [n]):
         return "PHONE"
     if n == 10 and d[0] == "0" and max(groups) <= 6:
         return "PHONE"
@@ -417,7 +442,7 @@ def id_digits_ok(tok: str) -> bool:
 CLIN_PROTECT = [
     re.compile(r"(?i)\b(?:BP|B\.P\.)\s*[:\-]?\s*\d{2,3}\s*/\s*\d{2,3}(?:\s*mm\s*hg)?"),
     re.compile(r"(?i)\b\d{2,3}\s*/\s*\d{2,3}\s*mm\s*hg"),
-    re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg/dl|g/dl|mmol/l|meq/l|iu/l|u/l|ng/ml|pg/ml|mg|mcg|ml|gm|g|iu|units?|%|/min|bpm|°f|°c|f\b|kg|cm|mm)\b"),
+    re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg/dl|g/dl|mmol/l|meq/l|iu/l|u/l|ng/ml|pg/ml|mg|mcg|ml|gm|g|iu|units?|%|/min|bpm|°f|°c|f\b|kg|cm|mm|/\s*cumm|/\s*cu\.?\s*mm|/\s*mm3|/\s*ul|cells(?:/[\w.]+)?)(?!\w)"),
     re.compile(r"\b[0-4]-[0-4]-[0-4](?:-[0-4])?\b"),
     re.compile(r"(?i)\bx\s*\d+\s*(?:days?|wks?|weeks?|months?|yrs?|years?|din|hafte)\b"),
     re.compile(r"\b[A-TV-Z]\d{2}(?:\.\d{1,2})?\b"),        # ICD-10
@@ -425,7 +450,7 @@ CLIN_PROTECT = [
     re.compile(r"(?i)\bBed\s*(?:No\.?)?\s*\d+\b"),
     re.compile(r"\bASHA\b|(?i:\basha\s+(?:workers?|sahayika|facilitator))"),
 ]
-RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSister|\bStaff\s+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)\s*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:\s+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
+RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSis\.|\bN/O|\bSister|\bStaff[ \t]+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)[ \t]*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:[ \t]+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
 
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"

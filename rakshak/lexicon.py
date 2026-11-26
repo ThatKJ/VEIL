@@ -134,36 +134,38 @@ FIELD_RULES = [
     ("PAN", r"pan|panno|pannumber"),
     ("EMAIL", r"e?mail|email\w*|ईमेल"),
     ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|phon|telecom|भ्रमणध्वनी"),
+    ("FAMILY_ID", r"ration\w*|bpl\w*|familyid|kasp\w*|chirayu\w*|ppp\w*"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
-    ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
+    ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|crn|crno|"
             r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
     ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|janana|jananam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
     ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|tande|ganda|tandegand|deuta|swami|pitri|bandhu|bandhuperu|rakshithav|"
                  r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
-                 r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|"
+                 r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|mergedfrom|"
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
     ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|bandham|relation_type"),
     ("DOCTOR", r"doctor\w*|dr|vaidyan|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
                r"careteam|team|teams|nurses?|nursing_staff|roster|dutyroster|rota|anaesthetist\w*|intern\w*|resident_doctor|"
-               r"seenby|assistedby|careprovider\w*|attendingstaff|"
+               r"seenby|assistedby|careprovider\w*|attendingstaff|bharnewala|enteredby|filledby|collectedby|updatedby|sahayak|pariseedhichathu|reportkarta|"
                r"nurse|staff|clerk|exportedby|practitioner|performer|author|signedby|verifiedby"),
     ("SAFE", r"aushadhi|aushadh|lakshanam|pani|chuma|rogam|marunnu|parathi|veekkam|dawa|dawai|oushadha|vaidyakiya|roganirnaya|pariksha|dooru|hospital|facility|lab|department|dept|specialty|speciality|ward|bed|"
              r"diagnos\w*|icd\w*|condition|complaint\w*|history|procedure\w*|package\w*|drug\w*|medicin\w*|"
              r"medication\w*|dose|dosage|test\w*|loinc|result\w*|value|unit\w*|range|amount\w*|status|vital\w*|"
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
              r"distt|jila|jillo|जिला|ज़िला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
-             r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*"),
+             r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*|khana|keemat|analyte|parameter"),
     ("NAME", r"name|naam|hesaru|peru|rugir|rugi|rogir|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
              r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
     ("AGE", r"age|umar|umr|umra|umir|vayassu|vayasu|prayam|boyos|boyosh|bayas|bayos|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
-    ("VILLAGE", r"village|gaon|gaanv|gam|gram|ooru|desam|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
-    ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna|vilasa|vilaasa"),
-    ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
+    ("VILLAGE", r"village|gaon|gaanv|gam|gram|graan|garan|ooru|desam|desham|taluk|thaluk|panchayat\w*|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
+    ("ADDRESS", r"address\w*|addr|street|house|hno|houseno|door|doorno|melvilasam|vilasam|vilaasa|vilasa|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna"),
+    ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admission|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
 FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]
+_DOB_RX = dict(FIELD_RX)["DOB"]
 
 
 def key_tokens(key: str) -> list[str]:
@@ -177,11 +179,13 @@ _DATE_TOK = re.compile(r"date|dated|dinanka|tithi|तारीख|तिथि|d
 def classify_key(key: str) -> str | None:
     toks = key_tokens(key)
     joined = "".join(toks)
-    if FIELD_RX[7][1].fullmatch(joined) or any(FIELD_RX[7][1].fullmatch(t) for t in toks):
+    if _DOB_RX.fullmatch(joined) or any(_DOB_RX.fullmatch(t) for t in toks):
         return "DOB"
     if _DATE_TOK.fullmatch(joined) or any(_DATE_TOK.fullmatch(t) for t in toks):
         return "DATE"
-    if any(t in ("address", "addr", "pata", "पता", "residence") for t in toks):
+    if toks == ["op"]:
+        return "MRN"
+    if any(t in ("address", "addr", "pata", "पता", "residence", "house", "vilasam", "melvilasam") for t in toks):
         return "ADDRESS"
     for kind, rx in FIELD_RX:
         if any(rx.fullmatch(t) for t in toks) or rx.fullmatch(joined):
@@ -193,10 +197,10 @@ def classify_key(key: str) -> str | None:
 NAME_LABEL = re.compile(
     rf"(?i)(?:^|(?<=[\s,;|(\[]))(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|"
     rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|labharthi|name|nm\.?|"
-    rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|लाभार्थी|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী)\s*[:：=\-]+\s*")
+    rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|लाभार्थी|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী|രോഗി|പേര്)\s*[:：=\-]+\s*")
 ADDRESS_LABEL = re.compile(
-    r"(?i)(?:^|(?<=[\s,;|(\[]))(?:(?:address|addr\.?|residence|"
-    r"patta|sarnamu|rihaish|thikana|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना)\s*[:：\-]+\s*"
+    r"(?i)(?:^|(?<=[\s,;|(\[]))(?:(?:address|addr\.?|residence|thamasa\s*sthalam|"
+    r"patta|sarnamu|rihaish|thikana|vilasam|melvilasam|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना|വിലാസം)\s*[:：\-]+\s*"
     r"|(?:resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala)\s*[:：\-]*\s*(?=(?-i:[A-Z0-9#\u0900-\u097F])))")
 VILLAGE_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:vill(?:age)?\.?|gaon|gam|gram|ग्राम|गाँव|गांव|पिंड|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
 DOB_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*(?:tithi|tarikh))\s*[:：\-]+\s*")

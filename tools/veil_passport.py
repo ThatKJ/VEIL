@@ -146,18 +146,28 @@ def audit(inp: Path, out: Path) -> dict:
     t0 = time.monotonic()
     rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
     recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-    by_sha = {e["input_sha256"]: e for e in rep.get("files", [])}
-    inputs = {hashlib.sha256(p.read_bytes()).hexdigest(): p for p in sorted(inp.rglob("*")) if p.is_file() and not p.is_symlink()}
+    files_rep = rep.get("files", [])
+    by_sha_q: dict[str, list[dict]] = {}
+    for e in files_rep:
+        by_sha_q.setdefault(e["input_sha256"], []).append(e)
+    in_list = [p for p in sorted(inp.rglob("*")) if p.is_file() and not p.is_symlink()]
+    in_pairs = [(hashlib.sha256(p.read_bytes()).hexdigest(), p) for p in in_list]
     R = {"privacy": {}, "clinical": {}, "identity": {}, "structural": {}, "residual_risks": []}
 
     # ---------------- D. structural integrity
-    accounted = sum(1 for s in inputs if s in by_sha)
-    exported = [e for e in rep["files"] if e.get("status") == "sanitized"]
+    used_entries = []
+    accounted = 0
+    for s, p in in_pairs:
+        q = by_sha_q.get(s)
+        e = q.pop(0) if q else None
+        if e is not None:
+            accounted += 1
+        used_entries.append((p, e))
+    exported = [e for e in files_rep if e.get("status") == "sanitized"]
     missing_out = [e for e in exported if not (out / e["output"]).is_file()]
     parse_ok = parse_fail = 0
     row_match = row_total = 0
-    for s, p in inputs.items():
-        e = by_sha.get(s)
+    for p, e in used_entries:
         if not e or e.get("status") != "sanitized":
             continue
         o = out / e["output"]
@@ -178,11 +188,12 @@ def audit(inp: Path, out: Path) -> dict:
         except (ValueError, csv.Error):
             parse_fail += 1
     counts = rep.get("counts", {})
-    honest = (counts.get("files_total") == len(rep["files"]) and counts.get("files_sanitized") == len(exported)
-              and counts.get("records_processed") == len(recs))
+    honest = (counts.get("files_total") == len(files_rep) and counts.get("files_sanitized") == len(exported)
+              and counts.get("records_processed") == len(recs) and accounted == len(in_pairs))
     R["structural"] = {
-        "input_files": len(inputs), "accounted_in_report": accounted, "exported": len(exported),
-        "quarantined": sum(1 for e in rep["files"] if e.get("status") == "quarantined"),
+        "input_files": len(in_pairs), "unique_sha256_inputs": len({s for s, _ in in_pairs}),
+        "accounted_in_report": accounted, "exported": len(exported),
+        "quarantined": sum(1 for e in files_rep if e.get("status") == "quarantined"),
         "declared_outputs_missing": len(missing_out), "outputs_parse_ok": parse_ok, "outputs_parse_fail": parse_fail,
         "tables_row_count_preserved": f"{row_match}/{row_total}", "report_counts_consistent": honest,
     }
@@ -219,8 +230,7 @@ def audit(inp: Path, out: Path) -> dict:
     kept = Counter()
     total = Counter()
     t_ok = t_total = 0
-    for s, p in inputs.items():
-        e = by_sha.get(s)
+    for p, e in used_entries:
         if not e or e.get("status") != "sanitized" or not (out / e["output"]).is_file():
             continue
         it = decode(p.read_bytes())
@@ -302,7 +312,7 @@ th{{color:var(--mut);font-weight:500;width:45%}} ul{{padding-left:20px}} .note{{
 {dev}
 <h2>What this does not show</h2>
 <p class="note">Sections A–D need no ground truth and are computed from this input/output pair only. Pattern hits can include
-false positives (clinical numbers). Absence of hits is not proof of anonymity. Development metrics and attacker estimates,
+false positives (clinical numbers); sampled clinical regex expressions kept does not equal ground-truth medical_kept. Absence of hits is not proof of anonymity. Development metrics and attacker estimates,
 when shown, come from a local re-implementation on synthetic data. The official evaluator's results are unknown.</p>
 </html>"""
 
