@@ -54,7 +54,7 @@
         <div class="meta-row"><span>Leader</span><span class="mono muted">Ishan Kumar</span></div>
         <div class="meta-row"><span>Members</span><span class="mono muted">Kirtan · Aryan · Ukani</span></div>
         <div class="meta-row"><span>Engine Mode</span><span class="badge badge-ok">Stdlib Offline</span></div>
-        <div class="meta-row"><span>Frozen Core</span><span class="mono muted">known-good-11</span></div>
+        <div class="meta-row"><span>Frozen Core</span><span class="mono muted">known-good-14 (APEX)</span></div>
         <div class="meta-row"><span>Network Calls</span><span class="mono muted">0 External</span></div>
       </div>
     </aside>
@@ -68,6 +68,7 @@
         </div>
         <div class="topbar-actions">
           <span id="status-pill" class="status-pill status-idle">Ready</span>
+          <button id="btn-reconnect-job" class="btn btn-ghost hidden">Reconnect Active Job</button>
           <button id="btn-quick-demo" class="btn btn-primary">Re-run Demo Bundle</button>
           <a id="btn-download-zip" href="/api/download/zip" class="btn btn-emerald">Download Sanitized ZIP</a>
         </div>
@@ -77,7 +78,10 @@
       <section id="progress-panel" class="progress-panel hidden" aria-live="polite">
         <div class="progress-head">
           <span id="progress-stage">Executing pipeline...</span>
-          <span id="progress-pct" class="mono">0%</span>
+          <div class="btn-row">
+            <span id="progress-pct" class="mono">0%</span>
+            <button id="btn-cancel-job" class="btn btn-ghost btn-xs hidden">Cancel</button>
+          </div>
         </div>
         <div class="progress-track">
           <div id="progress-fill" class="progress-fill" style="width:0%"></div>
@@ -137,8 +141,13 @@
             </p>
             <div id="dropzone" class="dropzone" tabindex="0">
               <div class="dropzone-title">Drop synthetic hospital files here</div>
-              <div class="dropzone-sub">or click to browse local files (up to 64 files / 16 MB)</div>
+              <div class="dropzone-sub">or click to add local files across one or more selections (1–64 files, max 16 MB)</div>
               <input id="file-input" type="file" multiple hidden />
+            </div>
+            <div id="upload-validation-msg" class="upload-error hidden" role="alert"></div>
+            <div id="staged-summary-bar" class="staged-summary hidden">
+              <span id="staged-stats-text" class="mono">0 / 64 files · 0.0 KB / 16.0 MB</span>
+              <button id="btn-clear-staged" type="button" class="btn btn-ghost btn-xs">Clear All</button>
             </div>
             <div id="staged-files-list" class="staged-list"></div>
           </div>
@@ -146,7 +155,7 @@
           <div class="card">
             <div class="card-head">
               <h2>Pipeline Configuration &amp; Execution</h2>
-              <span class="badge badge-slate">Zero LLM / Zero Cloud</span>
+              <span class="badge badge-slate">1x Engine Run · Lazy Audits</span>
             </div>
             <div class="form-group">
               <label for="policy-select">Quasi-Identifier Policy Mode</label>
@@ -166,6 +175,7 @@
               <button id="btn-run-demo" class="btn btn-primary">Run Bundled Demo Bundle</button>
             </div>
             <div id="runner-log" class="console-box">Engine idle.</div>
+            <div id="runner-timings" class="field-hint"></div>
           </div>
         </div>
       </section>
@@ -214,13 +224,12 @@
             <div>
               <h2>Cross-Hospital Patient Identity Graph (Zero Raw PII)</h2>
               <p class="card-sub">
-                Emerald hubs show pseudonyms (<code>PSN-*</code>). Solid links denote verified multi-channel linkage; dashed red arcs show homonyms or shared household IDs separated by hard cannot-link vetoes.
+                Emerald hubs show pseudonyms (<code>PSN-*</code>). Graph displays bounded clusters &amp; decisions while VEIL sanitizes 100% of records.
               </p>
             </div>
-            <div class="legend-row">
-              <span class="leg"><i class="dot dot-ok"></i>Matched Cluster</span>
-              <span class="leg"><i class="dot dot-veto"></i>Rejected (Cannot-Link Veto)</span>
-              <span class="leg"><i class="dot dot-amb"></i>Ambiguous / Unlinked</span>
+            <div class="btn-row">
+              <span id="graph-subset-badge" class="badge badge-slate">Pending analysis</span>
+              <button id="btn-run-identity" class="btn btn-emerald btn-xs">Analyze Identity Graph</button>
             </div>
           </div>
           <div class="graph-shell">
@@ -242,6 +251,13 @@
           <div class="table-wrap">
             <table class="data-table" id="decisions-table"></table>
           </div>
+          <div class="pager-row">
+            <span id="dec-page-info" class="mono muted">Showing 0 decisions</span>
+            <div class="btn-row">
+              <button id="dec-prev" class="btn btn-ghost btn-xs" disabled>Previous</button>
+              <button id="dec-next" class="btn btn-ghost btn-xs" disabled>Next</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -252,10 +268,13 @@
             <div>
               <h2>Privacy Arena — Empirical Policy Comparison on Active Dataset</h2>
               <p class="card-sub">
-                Same input dataset executed live under Direct Masking, Fixed QI Policy, and VEIL Adaptive Privacy. Measures real residual identifiers, visible 6-digit PINs, exact age exposure, adaptive escalations, and clinical preservation.
+                Same input dataset executed under Direct Masking, Fixed QI Policy, and VEIL Adaptive Privacy on demand (reusing matching active policy runs cleanly).
               </p>
             </div>
-            <span class="badge badge-emerald">Measured Live</span>
+            <div class="btn-row">
+              <span id="arena-status-badge" class="badge badge-slate">On-Demand</span>
+              <button id="btn-run-arena" class="btn btn-emerald">Run Privacy Arena (On-Demand)</button>
+            </div>
           </div>
           <div id="arena-cards" class="arena-grid"></div>
           <div class="table-wrap" style="margin-top:16px">
@@ -308,6 +327,7 @@
               </p>
             </div>
             <div class="btn-row">
+              <button id="btn-run-passport" class="btn btn-emerald">Verify Privacy Passport</button>
               <button id="btn-corrupt-demo" class="btn btn-amber">Inject Synthetic Defect</button>
               <button id="btn-repair-demo" class="btn btn-emerald hidden">Re-Run &amp; Repair VEIL</button>
               <a href="/api/passport/html" class="btn btn-ghost">Export HTML</a>

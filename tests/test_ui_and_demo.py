@@ -97,7 +97,20 @@ class TestDemoAndUI(unittest.TestCase):
                 with urllib.request.urlopen(base + "/api/state", timeout=5) as r:
                     state = json.loads(r.read().decode("utf-8"))
                 self.assertTrue(state["ready"])
-                self.assertEqual(len(state["privacy_arena"]), 3)
+                self.assertEqual(state["passport_status"], "verified")
+                self.assertEqual(state["engine_executions"], 1)
+                self.assertEqual(state["arena_status"], "pending")
+
+                # On-demand Privacy Arena reuses the active 'adaptive' run cleanly
+                req_arena = urllib.request.Request(base + "/api/arena/run", method="POST", data=b"{}")
+                with urllib.request.urlopen(req_arena, timeout=20) as r:
+                    arena_res = json.loads(r.read().decode("utf-8"))
+                self.assertEqual(len(arena_res["privacy_arena"]), 3)
+                adap_row = next(x for x in arena_res["privacy_arena"] if x["mode"] == "adaptive")
+                self.assertTrue(adap_row["reused_from_active_run"])
+
+                with urllib.request.urlopen(base + "/api/state", timeout=5) as r:
+                    state = json.loads(r.read().decode("utf-8"))
                 audit_blob = json.dumps({
                     "passport": state["passport"],
                     "identity_graph": state["identity_graph"],
@@ -161,11 +174,20 @@ class TestDemoAndUI(unittest.TestCase):
                 )
                 with urllib.request.urlopen(req_ok, timeout=15) as r:
                     done = json.loads(r.read().decode("utf-8"))
-                self.assertEqual(done["status"], "completed")
+                self.assertEqual(done["status"], "ready")
                 with urllib.request.urlopen(base + "/api/state", timeout=5) as r:
                     up_state = json.loads(r.read().decode("utf-8"))
                 self.assertEqual(up_state["dataset_label"], "Unit Upload Synth")
-                self.assertEqual(up_state["passport"]["privacy"]["files_with_residue"], 0)
+                self.assertEqual(up_state["engine_executions"], 1)
+                self.assertEqual(up_state["passport_status"], "pending")
+                self.assertEqual(up_state["arena_status"], "pending")
+
+                # Trigger on-demand Privacy Passport verification for uploaded dataset
+                req_pp = urllib.request.Request(base + "/api/passport/run", method="POST", data=b"{}")
+                with urllib.request.urlopen(req_pp, timeout=15) as r:
+                    pp_res = json.loads(r.read().decode("utf-8"))
+                self.assertEqual(pp_res["passport_status"], "verified")
+                self.assertEqual(pp_res["passport"]["privacy"]["files_with_residue"], 0)
                 shutil.rmtree(Path(td), ignore_errors=True)
             finally:
                 srv.shutdown()
