@@ -22,6 +22,17 @@ class RegressionTests(unittest.TestCase):
             check=True, capture_output=True, env=env,
         )
 
+    def test_national_id_typo_is_not_a_conflict_but_different_ids_are(self):
+        from rakshak.linker import _one_edit, compatible, Cluster
+        base = {"names": [["Vakeneel", "Grewal"]], "rel": [], "ids": set(), "phones": set(), "dob": "1990-02-17",
+                "age": 34, "gender": "M", "village": None}
+        a = Cluster(0, {**base, "ids": {"A:845014968778"}})
+        typo = Cluster(1, {**base, "ids": {"A:845104968778"}})        # adjacent transposition
+        other = Cluster(2, {**base, "ids": {"A:923614118770"}})       # a different person's number
+        self.assertTrue(_one_edit("845014968778", "845104968778"))
+        self.assertTrue(compatible(a, typo))
+        self.assertFalse(compatible(a, other))
+
     def test_schema_key_matching_patient_name_keeps_record_locators(self):
         """A patient called "Data" must not cause the structural key "data" to be renamed,
         which used to collapse every nested record to loc "doc" with patient null (H16)."""

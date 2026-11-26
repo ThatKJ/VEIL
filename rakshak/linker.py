@@ -164,9 +164,20 @@ def compatible(a: Cluster, b: Cluster) -> bool:
     for pref in ("A:", "B:", "N:"):
         xa = {i for i in a.ids if i.startswith(pref)}
         xb = {i for i in b.ids if i.startswith(pref)}
-        if xa and xb and not (xa & xb):
+        if xa and xb and not (xa & xb) and not any(_one_edit(x[2:], y[2:]) for x in xa for y in xb):
             return False
     return True
+
+
+def _one_edit(x: str, y: str) -> bool:
+    """Same-length national IDs differing by one substitution or one adjacent transposition are a
+    likely data-entry error, not proof of two different people (they still never count as a match)."""
+    if len(x) != len(y) or len(x) < 8:
+        return False
+    diff = [i for i in range(len(x)) if x[i] != y[i]]
+    if len(diff) == 1:
+        return True
+    return len(diff) == 2 and diff[1] == diff[0] + 1 and x[diff[0]] == y[diff[1]] and x[diff[1]] == y[diff[0]]
 
 
 class Linker:
@@ -196,39 +207,44 @@ class Linker:
 
     def run(self) -> list[int]:
         n = len(self.ev)
-        # ---- rule 1: strong identifiers (most specific first)
+        # ---- rule 1: strong identifiers (most specific first), then shared phones.
+        # Re-run after rule 2: a union refused against a partial cluster may become
+        # admissible once that cluster is complete (every union still passes compatible()).
         by_id = defaultdict(list)
         for i, e in enumerate(self.ev):
             for x in e["ids"]:
                 by_id[x].append(i)
-        for x in sorted(by_id, key=lambda k: ({"A": 0, "B": 0, "N": 1, "I": 2, "E": 2, "M": 3}.get(k[0], 4), k)):
-            idx = by_id[x]
-            for j in idx[1:]:
-                self.union(idx[0], j)
-        # phone numbers: households share them, so require compatible names AND a name on both sides
+        id_order = sorted(by_id, key=lambda k: ({"A": 0, "B": 0, "N": 1, "I": 2, "E": 2, "M": 3}.get(k[0], 4), k))
         by_ph = defaultdict(list)
         for i, e in enumerate(self.ev):
             for p in e["phones"]:
                 by_ph[p].append(i)
-        for p in sorted(by_ph):
-            idx = by_ph[p]
-            if len(idx) > 250:
-                continue
-            reps: list[int] = []
-            for j in idx:
-                b = self.cl[self.find(j)]
-                if not b.names:
+
+        def strong_pass():
+            for x in id_order:
+                idx = by_id[x]
+                if len(idx) > 250:
                     continue
-                merged = False
-                for r in reps:
-                    a = self.cl[self.find(r)]
-                    if a.names and self.union(r, j):
-                        merged = True
-                        break
-                if not merged and len(reps) < 32:
-                    rj = self.find(j)
-                    if rj not in reps:
-                        reps.append(rj)
+                reps: list[int] = []
+                for j in idx:
+                    if not any(self.union(r, j) for r in reps) and len(reps) < 32:
+                        rj = self.find(j)
+                        if rj not in reps:
+                            reps.append(rj)
+            for p in sorted(by_ph):
+                idx = by_ph[p]
+                if len(idx) > 250:
+                    continue
+                reps = []
+                for j in idx:
+                    if not self.cl[self.find(j)].names:
+                        continue
+                    if not any(self.cl[self.find(r)].names and self.union(r, j) for r in reps) and len(reps) < 32:
+                        rj = self.find(j)
+                        if rj not in reps:
+                            reps.append(rj)
+
+        strong_pass()
         # ---- rule 2: Fellegi-Sunter-inspired evidence scoring with term-frequency weights,
         # only accepting when a candidate clears threshold AND leads the runner-up by a clear margin.
         for _ in range(2):
@@ -328,4 +344,5 @@ class Linker:
                 elif len(scored) > 1 and os.environ.get("RAKSHAK_P_FS_TIEBREAK", "on") != "off":
                     if scored[0][0] - scored[1][0] >= 2.0:
                         self.union(r, scored[0][1])
+        strong_pass()
         return [self.find(i) for i in range(n)]
