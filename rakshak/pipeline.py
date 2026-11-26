@@ -27,17 +27,19 @@ from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_DOCTOR, RX_DOTTED_PHONE, R
 from .linker import Linker
 from .scrub import NAME_VALUE, Masker
 from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_HON_AFTER, RX_KIN_POSS, RX_LABEL,
-                    RX_NAME_ROLE, RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _name_ok, generalize_address,
-                    scrub_text)
+                    RX_NAME_ROLE, RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _KIN_STATUS_WORDS,
+                    _RX_FAMILY_ID_HEAD, _WO_SO_CLIN, _decode_hidden, _name_ok, generalize_address, scrub_text)
 from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ, STOP_WORDS
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
-               ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".hl7", ".rtf", ".odt", ".ppt", ".pptx",
+               ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".rtf", ".odt", ".ppt", ".pptx",
                ".heic", ".webp", ".mp3", ".mp4", ".wav"}
 ID_KINDS = {"MRN", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE", "FAMILY_ID"}
 STRUCT_KEYS = {"resourceType", "id", "fullUrl", "reference", "system", "url", "profile", "status", "type", "use",
                "mode", "contentType", "language", "coding", "code", "unit", "versionId", "schema",
                "loinc", "interpretation", "category", "intent", "priority", "valueQuantity", "comparator"}
+_FHIR_ONLY_STRUCT = {"resourceType", "id", "fullUrl", "reference", "system", "url", "profile", "status", "type", "use",
+                     "mode", "contentType", "language", "versionId", "schema", "intent", "priority"}
 GENDER_TOK = {"gender", "sex", "sx", "ling", "linga", "aan", "pen", "लिंग"}
 DISTRICT_TOK = {"district", "distt", "jila", "jillo", "जिला", "ज़िला", "zila", "janpad"}
 TEHSIL_TOK = {"tehsil", "तहसील", "तह", "taluka", "taluko", "block", "ta"}
@@ -51,7 +53,7 @@ class Stats(dict):
 class FileJob:
     __slots__ = ("rel", "raw", "raw_len", "src_path", "reparse", "sha", "ext", "kind", "text", "data", "delim",
                  "rows", "order", "recs", "status", "reason", "out_rel", "bom", "crlf", "indent", "doc_rec",
-                 "colkinds", "rec_ptrs", "branches", "out_locs", "preamble", "widths", "repeat_headers",
+                 "colkinds", "rec_ptrs", "branches", "out_locs", "bundle_links", "preamble", "widths", "repeat_headers",
                  "keyed", "eav", "col_map", "str_records")
 
     def __init__(self, rel, raw, src_path: Path | None = None):
@@ -75,6 +77,7 @@ class FileJob:
         self.rec_ptrs = {}
         self.branches = set()
         self.out_locs = {}
+        self.bundle_links = {}
         self.preamble = []
         self.widths = []
         self.repeat_headers = set()
@@ -88,12 +91,25 @@ class FileJob:
 _RX_GROUP_PATH = re.compile(r"[a-z_][a-z0-9_]{2,}(?:/[a-z_][a-z0-9_]{2,})+")
 _INSTITUTIONAL_EMAIL = re.compile(
     r"(?i)^(?:reports?|noreply|no-reply|billing|pathology|diagnostics?|"
-    r"records?|notifications?|alerts?|portal|frontdesk)@"
+    r"records?|notifications?|alerts?|portal|frontdesk|info|admin|contact|"
+    r"reception|lab|opd|registration|support|care|hospital|clinic|helpdesk|desk)@"
 )
 
 
 def _is_personal_email(addr: str) -> bool:
     return not _INSTITUTIONAL_EMAIL.match(addr.strip().lower())
+
+
+def _mobile_core(digits: str) -> str | None:
+    if len(digits) == 14 and digits.startswith("0091") and digits[4] in "6789":
+        return digits[4:]
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
+        return digits[2:]
+    if len(digits) == 11 and digits[0] == "0" and digits[1] in "6789":
+        return digits[1:]
+    if len(digits) == 10 and digits[0] in "6789":
+        return digits
+    return None
 
 
 @lru_cache(maxsize=16384)
@@ -108,12 +124,12 @@ def kind_of_key(key: str) -> str | None:
     return L.classify_key(key)
 
 
-def child_kind(key: str, parent: str | None) -> str | None:
-    if key in STRUCT_KEYS:
+def child_kind(key: str, parent: str | None, in_fhir: bool = False) -> str | None:
+    if key in STRUCT_KEYS and (in_fhir or key not in _FHIR_ONLY_STRUCT):
         return "STRUCT"
     k = kind_of_key(key)
     if parent == "STRUCT":
-        return "STRUCT"
+        return "STRUCT" if (in_fhir or k is None) else k
     if k is None:
         return parent
     if parent in ("REL_NAME", "DOCTOR", "SAFE") and k == "NAME":
@@ -214,7 +230,7 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     if kind == "NAME":
         kin_m = _RX_KIN_TAIL.search(s)
         pt_part = s[:kin_m.start()].strip() if kin_m else s
-        rel_part = kin_m.group(1).strip() if kin_m else None
+        rel_part = kin_m.group(2).strip() if kin_m else None
         H.add_name(pt_part)
         sp_clean = _RX_SPACE_KIN.sub(" ", pt_part) if "/" in pt_part else pt_part
         toks = [t for t in _RX_COMMA_WS.split(sp_clean) if t]
@@ -240,17 +256,24 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
         a = s if s.isascii() and s.isalnum() else _RX_NON_ALNUM_PL.sub("", s)
         a = a.upper()
         if _phone_like(a):                       # a contact number in an ID-labelled field links as a phone
-            rec.add_phone(_RX_NON_DIG_PL.sub("", a)[-10:])
+            mc = _mobile_core(_RX_NON_DIG_PL.sub("", a))
+            if mc:
+                rec.add_phone(mc)
         elif len(a) >= 4:
             rec.add_id("M:" + a)
             rec.is_patient = True
     elif kind in ("AADHAAR", "ABHA"):
-        d_src = s if s.isascii() else s.translate(_INDIC_DIGITS)
-        d = _RX_NON_DIG_PL.sub("", d_src)
-        if len(d) >= 8:
-            H.id_digits.add(d)
-            rec.add_id(("A:" if kind == "AADHAAR" else "B:") + d)
+        if kind == "ABHA" and "@" in s:
+            H.add_id(s)
+            rec.add_id("B:" + s.lower())
             rec.is_patient = True
+        else:
+            d_src = s if s.isascii() else s.translate(_INDIC_DIGITS)
+            d = _RX_NON_DIG_PL.sub("", d_src)
+            if len(d) >= 8:
+                H.id_digits.add(d)
+                rec.add_id(("A:" if kind == "AADHAAR" else "B:") + d)
+                rec.is_patient = True
     elif kind == "PAN":
         H.add_id(s)
         rec.add_id("N:" + s.upper())
@@ -262,14 +285,20 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     elif kind == "EMAIL":
         H.ids.add(_RX_NON_ALNUM_PL.sub("", s).upper())
         if _is_personal_email(s):
-            rec.add_id("E:" + s.lower())
+            if re.search(r"@(?:abdm|sbx|ndhm|nha)\b", s, re.I):
+                H.add_id(s)
+                rec.add_id("B:" + s.lower())
+                rec.is_patient = True
+            else:
+                rec.add_id("E:" + s.lower())
     elif kind == "PHONE":
         d_src = s if s.isascii() else s.translate(_INDIC_DIGITS)
         d = _RX_NON_DIG_PL.sub("", d_src)
         if len(d) >= 10:
-            d = d[-10:]
-            H.phones.add(d)
-            rec.add_phone(d)
+            H.phones.add(d[-10:])
+            mc = _mobile_core(d)
+            if mc:
+                rec.add_phone(mc)
     elif kind == "DOB":
         d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
         rec.dob = d.isoformat() if d else s
@@ -510,7 +539,10 @@ def _scan_plain_text_evidence(text: str, order: str):
         rel, toks = m.group(1), clean_name_seq(m.group(2))
         if not toks or not _name_ok(toks):
             continue
-        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
+        t0c = toks[0].rstrip(".,;:").lower()
+        if any(tok.rstrip(".,;:").lower() in _KIN_STATUS_WORDS for tok in toks):
+            continue
+        if rel.upper().startswith(("C/O", "S/O", "H/O", "W/O")) and (L.COMPLAINT_WORDS.match(t0c) or _WO_SO_CLIN.match(t0c) or t0c in L.CLINICAL_WORDS or (toks[0][:1].isascii() and toks[0][:1].islower())):
             continue
         h_names.append(" ".join(toks))
         rels.append(toks)
@@ -536,6 +568,9 @@ def _scan_plain_text_evidence(text: str, order: str):
                 h_ids.append(tok)
                 is_patient = True
         for m in RX_ID_LABEL.finditer(text):
+            if _RX_FAMILY_ID_HEAD.match(m.group(0)):
+                h_ids.append(m.group(1).strip(" :-."))
+                continue
             tok = m.group(1).strip(" :-.")
             digits = _RX_NON_DIG_PL.sub("", tok)
             if len(digits) >= 4 and not re.fullmatch(r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}", tok):
@@ -548,21 +583,29 @@ def _scan_plain_text_evidence(text: str, order: str):
             k = classify_digits(m.group(1))
             d = _RX_NON_DIG_PL.sub("", m.group(1).translate(_INDIC_DIGITS))
             if k == "PHONE":
-                ev_phones.append(d[-10:])
                 h_phones.append(d[-10:])
+                mc = _mobile_core(d)
+                if mc:
+                    ev_phones.append(mc)
             elif k in ("AADHAAR", "ABHA"):
                 ev_ids.append(("A:" if k == "AADHAAR" else "B:") + d)
                 h_digs.append(d)
         for m in RX_DOTTED_PHONE.finditer(text):
             d = _RX_NON_DIG_PL.sub("", m.group(0).translate(_INDIC_DIGITS))
             if len(d) >= 10:
-                ev_phones.append(d[-10:])
                 h_phones.append(d[-10:])
+                mc = _mobile_core(d)
+                if mc:
+                    ev_phones.append(mc)
     if "@" in text:
         for m in RX_EMAIL.finditer(text):
             em = m.group(0).lower()
             if _is_personal_email(em):
-                ev_ids.append("E:" + em)
+                if re.search(r"@(?:abdm|sbx|ndhm|nha)\b", em):
+                    ev_ids.append("B:" + em)
+                    h_ids.append(m.group(0))
+                else:
+                    ev_ids.append("E:" + em)
     if has_digit:
         m = DOB_RX.search(text)
         if m:
@@ -959,8 +1002,30 @@ def json_records(node, job, path=()):
             patients = [(i, item) for i, item in enumerate(entries) if isinstance(item, dict)
                         and isinstance(item.get("resource"), dict) and item["resource"].get("resourceType") == "Patient"]
             if len(patients) > 1:
+                ref_map = {}
                 for i, item in patients:
-                    yield path + ("entry", i), item, None
+                    p_path = path + ("entry", i)
+                    fu = item.get("fullUrl")
+                    if isinstance(fu, str) and fu:
+                        ref_map[fu] = p_path
+                    rid = item["resource"].get("id")
+                    if isinstance(rid, str) and rid:
+                        ref_map[f"Patient/{rid}"] = p_path
+                    yield p_path, item, None
+                for j_idx, item in enumerate(entries):
+                    if not isinstance(item, dict) or not isinstance(item.get("resource"), dict):
+                        continue
+                    res = item["resource"]
+                    if res.get("resourceType") == "Patient":
+                        continue
+                    for rk_name in ("subject", "patient"):
+                        ref_obj = res.get(rk_name)
+                        ref_val = ref_obj.get("reference") if isinstance(ref_obj, dict) else None
+                        if isinstance(ref_val, str) and ref_val in ref_map:
+                            epath = path + ("entry", j_idx)
+                            job.bundle_links[epath] = ref_map[ref_val]
+                            job.branches.update(epath[:k] for k in range(len(epath)))
+                            break
         return
     if _pairs(node) or _field_columns(node):
         return
@@ -1092,12 +1157,13 @@ def _fixed_rows(text):
     return [[line[a:b].strip() for a, b in bounds] for line in lines], starts
 
 
-def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, col_map: dict[str, str] | None = None):
+def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, col_map: dict[str, str] | None = None, in_fhir: bool = False):
     if isinstance(obj, dict):
         lmap = _extract_col_map(obj)
         cmap = {**(col_map or {}), **lmap} if lmap else col_map
         rk = res_kind
         rt = obj.get("resourceType")
+        fhir = in_fhir or (rt is not None)
         if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService", "MessageHeader"):
             rk = "DOCTOR"
         elif rt == "RelatedPerson":
@@ -1108,7 +1174,7 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
         ext_kind = ext_value_kind(obj)
         for k, v in obj.items():
             eff_k = cmap.get(k, k) if cmap else k
-            ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base)
+            ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base, fhir)
             toks = set(L.key_tokens(eff_k))
             if (eff_k == "gender" or toks & GENDER_TOK) and ck != "AGE":
                 g = gender_of(v) if isinstance(v, str) else None
@@ -1129,20 +1195,20 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
                 continue
             if toks & COND_TOK and isinstance(v, str):
                 _add_cond(rec, norm(v))
-            walk_evidence(v, ck, rec, H, order, rk, cmap)
+            walk_evidence(v, ck, rec, H, order, rk, cmap, fhir)
     elif isinstance(obj, list):
         cols = _field_columns(obj)
         if cols:
             label, value = cols
             for item in obj:
-                walk_evidence({item[label]: item[value]}, kind, rec, H, order, res_kind, col_map)
+                walk_evidence({item[label]: item[value]}, kind, rec, H, order, res_kind, col_map, in_fhir)
             return
         if _pairs(obj):
             for lab, val in obj:
-                walk_evidence({lab: val}, kind, rec, H, order, res_kind, col_map)
+                walk_evidence({lab: val}, kind, rec, H, order, res_kind, col_map, in_fhir)
             return
         for x in obj:
-            walk_evidence(x, kind, rec, H, order, res_kind, col_map)
+            walk_evidence(x, kind, rec, H, order, res_kind, col_map, in_fhir)
     elif isinstance(obj, (str, int, float)) and not isinstance(obj, bool):
         if kind == "DATE":
             if isinstance(obj, str) and not rec.date:
@@ -1235,8 +1301,10 @@ def pass1(job: FileJob, H: Harvest):
     if kind == "json" and job.ext != ".json":
         try:
             json.loads(text)
-        except (ValueError, RecursionError):
+        except ValueError:
             kind = "table" if job.ext in (".csv", ".tsv") else "text"
+        except RecursionError:
+            raise
     fixed = _fixed_rows(text) if kind == "text" else None
     if fixed:
         kind = "table"
@@ -1374,6 +1442,14 @@ def pass1(job: FileJob, H: Harvest):
                     if prev_rec is not None and prev_rec.is_patient and not r.names and not r.ids:
                         for pid_tok in prev_rec.ids:
                             r.add_id(pid_tok)
+                        for pnk in prev_rec.names:
+                            r.add_name_toks(pnk)
+                        if not r.dob and prev_rec.dob:
+                            r.dob = prev_rec.dob
+                        if not r.gender and prev_rec.gender:
+                            r.gender = prev_rec.gender
+                        if r.age is None and prev_rec.age is not None:
+                            r.age = prev_rec.age
                         r.is_patient = True
                     job.recs.append(r)
                     continue
@@ -1526,11 +1602,15 @@ class Rewriter:
             if ctx.rule is not None and ctx.rule.dob == "year_drop":
                 st["generalized"] += 1
                 return "[DOB]"
+            if re.fullmatch(r"\d{4}(?:-\d{2})?", s.strip()):
+                return s.strip()[:4]
             out = shift_dates_in(s, ctx.days, ctx.order)
             return out if out != s else "[DOB]"
         if kind == "DATE":
             return shift_dates_in(s, ctx.days, ctx.order) if ctx.days else s
         if kind == "AGE":
+            if re.search(r"(?<!\d)\d{1,3}\s*[-–]\s*\d{1,3}", s):
+                return s
             m = re.search(r"-?\d{1,3}", s)
             if m:
                 st["generalized"] += 1
@@ -1648,7 +1728,7 @@ class Rewriter:
         spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
         return not (self.sw.rx_lat_full.search(spaced) or self.sw.rx_ids.search(k))
 
-    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None, depth: int = 0, col_map: dict[str, str] | None = None):
+    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None, depth: int = 0, col_map: dict[str, str] | None = None, in_fhir: bool = False):
         if depth > MAX_JSON_DEPTH:
             raise ValueError("too_deep")
         if isinstance(obj, dict):
@@ -1656,6 +1736,7 @@ class Rewriter:
             cmap = {**(col_map or {}), **lmap} if lmap else col_map
             rk = res_kind
             rt = obj.get("resourceType")
+            fhir = in_fhir or (rt is not None)
             if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService", "MessageHeader"):
                 rk = "DOCTOR"
             elif rt == "RelatedPerson":
@@ -1668,7 +1749,7 @@ class Rewriter:
             is_fhir_patient = rt == "Patient"
             for k, v in obj.items():
                 eff_k = cmap.get(k, k) if cmap else k
-                ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base)
+                ck = ext_kind if (ext_kind and eff_k.startswith("value")) else child_kind(eff_k, base, fhir)
                 if (lmap and isinstance(v, dict) and len(v) >= 2
                         and all(isinstance(a, str) and isinstance(b, str) and lmap.get(a) == b for a, b in v.items())):
                     ck = "STRUCT"
@@ -1683,22 +1764,22 @@ class Rewriter:
                     ck = "DISTRICT"
                 elif toks & TEHSIL_TOK and isinstance(v, str):
                     ck = "TEHSIL"
-                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk, depth + 1, cmap)
+                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk, depth + 1, cmap, fhir)
             return out
         if isinstance(obj, list):
             cols = _field_columns(obj)
             if cols:
                 label, value = cols
                 return [{label: self.key(item[label], ctx, set()),
-                         value: self.walk(item[value], child_kind(item[label], kind), ctx, rec, res_kind, depth + 1, col_map)}
+                         value: self.walk(item[value], child_kind(item[label], kind, in_fhir), ctx, rec, res_kind, depth + 1, col_map, in_fhir)}
                         for item in obj]
             if _pairs(obj):
                 out = []
                 for lab, val in obj:
-                    ck = child_kind(lab, kind) if lab not in STRUCT_KEYS else "STRUCT"
-                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind, depth + 1, col_map)])
+                    ck = child_kind(lab, kind, in_fhir) if lab not in STRUCT_KEYS else "STRUCT"
+                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind, depth + 1, col_map, in_fhir)])
                 return out
-            return [self.walk(x, kind, ctx, rec, res_kind, depth + 1, col_map) for x in obj]
+            return [self.walk(x, kind, ctx, rec, res_kind, depth + 1, col_map, in_fhir) for x in obj]
         return self.value(obj, kind, ctx, rec)
 
 
@@ -1717,6 +1798,9 @@ def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None, out_path=(),
             return [rw.walk(v, child_kind(str(header[i]), None) if i < len(header) else None, ctx, rec, col_map=cmap)
                     for i, v in enumerate(node)]
         return rw.walk(node, None, ctx, rec, col_map=cmap)
+    if path in job.bundle_links:
+        pat_rec = job.rec_ptrs[job.bundle_links[path]][0]
+        return rw.walk(node, kind, ctx_for(pat_rec, job), pat_rec, col_map=cmap, in_fhir=True)
     if path not in job.branches:
         return rw.walk(node, kind, meta_ctx, None, col_map=cmap)
     if isinstance(node, dict):
@@ -1892,6 +1976,10 @@ def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
     stem, ext = os.path.splitext(comp)
     orig_stem = stem
     flagged = False
+    stem_dec = _decode_hidden(stem)
+    if stem_dec != stem:
+        stem = stem_dec
+        flagged = True
 
     def cluster(m):
         nonlocal flagged
@@ -1972,8 +2060,22 @@ def build_verify_index(crit) -> tuple[list[str], dict[str, str | list[str]]]:
     return fallback, by_tok
 
 
+def _casefold_with_spans(text: str):
+    """Return (casefolded_text, start_orig_idx_per_cf_char, end_orig_idx_per_cf_char)."""
+    cf_chars: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    for i, ch in enumerate(text):
+        f = ch.casefold()
+        for _ in f:
+            cf_chars.append(_)
+            starts.append(i)
+            ends.append(i + 1)
+    return "".join(cf_chars), starts, ends
+
+
 def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, str | list[str]]] | None = None) -> tuple[str, int]:
-    """Exact-substring check of critical harvested values on the NFKC/casefold view; masks any survivor."""
+    """Deterministic, casefold-safe substring check of critical harvested values; masks any survivor."""
     hits = 0
     M = Masker()
     text = RX_DOCTOR.sub(lambda m: M.put(m.group(0)), text)
@@ -1981,7 +2083,7 @@ def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, st
     if index is not None:
         fallback, by_tok = index
         cands = list(fallback) if fallback else []
-        seen_toks = set(_VERIFY_TOK.findall(low))
+        seen_toks = sorted(set(_VERIFY_TOK.findall(low)))
         for tok in seen_toks:
             val = by_tok.get(tok)
             if val is None:
@@ -1990,20 +2092,47 @@ def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, st
                 cands.append(val)
             else:
                 cands.extend(val)
-        cands.sort(key=len, reverse=True)
+        cands.sort(key=lambda x: (-len(x), x))
     else:
-        cands = crit
-    for c in cands:
-        if c and c in low:
-            idx = 0
-            while True:
-                j = text.casefold().find(c, idx)
-                if j < 0:
-                    break
-                text = text[:j] + "[REDACTED]" + text[j + len(c):]
-                hits += 1
-                idx = j + 10
-            low = text.casefold()
+        cands = sorted(crit, key=lambda x: (-len(x), x))
+    if text.isascii() and len(low) == len(text):
+        for c in cands:
+            if c and c in low:
+                idx = 0
+                while True:
+                    j = low.find(c, idx)
+                    if j < 0:
+                        break
+                    text = text[:j] + "[REDACTED]" + text[j + len(c):]
+                    low = low[:j] + "[redacted]" + low[j + len(c):]
+                    hits += 1
+                    idx = j + 10
+    else:
+        for c in cands:
+            if c and c in low:
+                cf_txt, starts, ends = _casefold_with_spans(text)
+                spans = []
+                idx = 0
+                while True:
+                    j = cf_txt.find(c, idx)
+                    if j < 0:
+                        break
+                    s_o = starts[j]
+                    e_o = ends[j + len(c) - 1]
+                    if not spans or s_o >= spans[-1][1]:
+                        spans.append((s_o, e_o))
+                    idx = j + len(c)
+                if spans:
+                    out_p = []
+                    last = 0
+                    for s_o, e_o in spans:
+                        out_p.append(text[last:s_o])
+                        out_p.append("[REDACTED]")
+                        last = e_o
+                        hits += 1
+                    out_p.append(text[last:])
+                    text = "".join(out_p)
+                    low = text.casefold()
     return M.restore(text), hits
 
 
@@ -2322,6 +2451,13 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp_dest = dest.with_name(f".veil_tmp_{os.getpid()}_{dest.name}")
+        f_st = Stats()
+        f_rw = Rewriter(H, sw, f_st, policy, rec_ids=rec_ids, rec_digs=rec_digs)
+        f_ctx_fn = (
+            lambda rec, jb: Ctx(H, rec.pid, P.days_for(rec.key, maxd), jb.order, plan.band_args(rec.key), f_st, plan.rule(rec.key))
+            if (rec is not None and rec.pid)
+            else Ctx(H, None, P.days_for(f"{jb.rel}#{rec.loc}" if rec is not None else jb.rel, maxd), jb.order, plan.band_args(None), f_st, plan.default)
+        )
         try:
             with time_budget(_file_budget(j.raw_len)):
                 if j.reparse:
@@ -2337,15 +2473,15 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                             chunk_buf.clear()
                             if verify_on:
                                 block, hits = verify_text(block, crit, verify_idx)
-                                st_loc["verify_hits"] += hits
+                                f_st["verify_hits"] += hits
                             out_f.write(block)
 
                         if j.kind == "jsonl":
                             data_iter = _iter_reparse_jsonl(j) if j.reparse else iter(j.data)
                             for r, obj in zip(j.recs, data_iter):
-                                c = ctx_fn(r, j)
+                                c = f_ctx_fn(r, j)
                                 if isinstance(obj, (dict, list)):
-                                    line_out = json.dumps(rw_loc.walk(obj, None, c, r), ensure_ascii=False)
+                                    line_out = json.dumps(f_rw.walk(obj, None, c, r), ensure_ascii=False)
                                 else:
                                     line_out = scrub_text(obj, c, sw)
                                 chunk_buf.append(line_out + "\n")
@@ -2355,7 +2491,7 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                         else:
                             line_buf = io.StringIO()
                             w = csv.writer(line_buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")
-                            hctx = ctx_fn(None, j)
+                            hctx = f_ctx_fn(None, j)
                             row_iter = _iter_reparse_table(j) if j.reparse else iter(j.rows)
                             hdr_raw = next(row_iter)
                             header = [scrub_text(h, hctx, sw) for h in hdr_raw]
@@ -2365,7 +2501,7 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
 
                             def emit_row(values):
                                 if j.widths:
-                                    fields = [v.ljust(b - a) for v, a, b in zip(values, j.widths, j.widths[1:])]
+                                    fields = [v.ljust(max(b - a, len(v) + 1)) for v, a, b in zip(values, j.widths, j.widths[1:])]
                                     chunk_buf.append("".join(fields) + values[-1] + _nl)
                                 elif all(_delim not in v and '"' not in v and "\n" not in v and "\r" not in v for v in values):
                                     chunk_buf.append(_delim.join(values) + _nl)
@@ -2386,17 +2522,17 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                                     emit_row(header if row == hdr_raw else [scrub_text(v, hctx, sw) for v in row])
                                     continue
                                 r = j.recs[i]
-                                c = ctx_fn(r, j)
+                                c = f_ctx_fn(r, j)
                                 new_row = []
                                 bk = _banner_kinds(row, j.colkinds, j.order)
                                 if bk is not None:
                                     for ci, v in enumerate(row):
-                                        new_row.append(rw_loc.value(v, bk[ci], c, r))
+                                        new_row.append(f_rw.value(v, bk[ci], c, r))
                                     emit_row(new_row)
                                     continue
                                 if _is_kv_cont(row):
                                     for v in row:
-                                        new_row.append(rw_loc.value(v, None, c, r))
+                                        new_row.append(f_rw.value(v, None, c, r))
                                     emit_row(new_row)
                                     continue
                                 ragged = len(row) < len(j.colkinds) or (len(row) > len(j.colkinds) and len(j.colkinds) < 6)
@@ -2409,29 +2545,30 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                                         new_row.append(scrub_text(v, c, sw))
                                         continue
                                     if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
-                                        st_loc["identifiers"] += 1
+                                        f_st["identifiers"] += 1
                                         new_row.append("")
                                         continue
                                     if k == "COND":
                                         new_row.append(scrub_text(v, c, sw))
                                         continue
-                                    new_row.append(rw_loc.value(v, k, c, r))
+                                    new_row.append(f_rw.value(v, k, c, r))
                                 emit_row(new_row)
                             flush_chunk()
                 else:
                     if j.kind == "json":
                         if j.rec_ptrs:
-                            meta_ctx = ctx_fn(None, j)
-                            data = rewrite_json(rw_loc, j.data, (), j, meta_ctx, ctx_fn)
+                            meta_ctx = f_ctx_fn(None, j)
+                            data = rewrite_json(f_rw, j.data, (), j, meta_ctx, f_ctx_fn)
                         else:
                             r = j.doc_rec
-                            data = rw_loc.walk(j.data, None, ctx_fn(r, j), r, col_map=j.col_map or None)
+                            data = f_rw.walk(j.data, None, f_ctx_fn(r, j), r, col_map=j.col_map or None)
                         result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
                     else:
                         r = j.doc_rec
-                        c = ctx_fn(r, j)
-                        if RX_HL7.match(j.text):
-                            result = _hl7_rw_ref(j.text, rw_loc, c, r, sw)
+                        c = f_ctx_fn(r, j)
+                        is_hl7 = bool(RX_HL7.match(j.text))
+                        if is_hl7:
+                            result = _hl7_rw_ref(j.text, f_rw, c, r, sw)
                         else:
                             blocks = []
 
@@ -2440,21 +2577,23 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                                 if bp is None:
                                     return m.group(0)
                                 tag = f"@@VEILSTRUCT_{len(blocks)}@@"
-                                blocks.append((tag, m.group(1) + json.dumps(rw_loc.walk(bp, None, c, r), ensure_ascii=False) + m.group(3)))
+                                blocks.append((tag, m.group(1) + json.dumps(f_rw.walk(bp, None, c, r), ensure_ascii=False) + m.group(3)))
                                 return tag
 
                             masked_t = _RX_STRUCT_BLOCK.sub(_rw_struct, j.text)
-                            result = scrub_text(kv_rewrite(masked_t, rw_loc, c, r), c, sw)
+                            result = scrub_text(kv_rewrite(masked_t, f_rw, c, r), c, sw)
                             for tag, body in blocks:
                                 result = result.replace(tag, body)
-                        if r is not None and r.pid and r.pid not in result:
+                        if r is not None and r.pid and r.pid not in result and not is_hl7:
                             result = f"Patient: {r.pid}\n" + result
                     if verify_on:
                         result, hits = verify_text(result, crit, verify_idx)
-                        st_loc["verify_hits"] += hits
+                        f_st["verify_hits"] += hits
                     with open(tmp_dest, "w", encoding="utf-8", newline="") as out_f:
                         out_f.write(result)
                 os.replace(tmp_dest, dest)
+                for k_st, v_st in f_st.items():
+                    st_loc[k_st] += v_st
         except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
             if tmp_dest.exists():
                 tmp_dest.unlink(missing_ok=True)
@@ -2535,6 +2674,8 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                         jb.out_locs = {lk: tuple(lv) for lk, lv in olocs.items()}
                 fork_done = True
             else:
+                for tf in san_resolved.rglob(".veil_tmp_*"):
+                    tf.unlink(missing_ok=True)
                 for idx in b1:
                     if jobs[idx].status == "sanitized":
                         _rewrite_one(jobs[idx], rw, st, ctx_for)

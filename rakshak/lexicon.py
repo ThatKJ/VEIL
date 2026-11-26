@@ -171,7 +171,8 @@ FIELD_RULES = [
             r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
     ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|janana|jananam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
-    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|tande|ganda|tandegand|deuta|swami|pitri|bandhu|bandhuperu|rakshithav|"
+    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|tande|ganda|tandegand|deuta|swami|pitri|bandhu|bandhuperu|bandhuvu|rakshithav|"
+                 r"sambandhi|rishtedar\w*|sagapan|natedar|atmiya|swajan|pariwar|kutumb|uravinar|nextofkin|"
                  r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
                  r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|mergedfrom|"
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),

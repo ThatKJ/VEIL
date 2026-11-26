@@ -283,17 +283,28 @@ def _rel_match(ra, rb) -> int:
 
 
 def _ages_ok(a: Cluster, b: Cluster) -> bool:
-    if not (a.ages and b.ages):
-        return True
-    adiff = min(abs(x - y) for x in a.ages for y in b.ages)
-    if adiff <= 2:
-        return True
-    if adiff <= 5:
-        if a.dob_yrs and b.byears and min(abs(x - y) for x in a.dob_yrs for y in b.byears) <= 1:
+    if a.ages and b.ages:
+        lo_a, hi_a = min(a.ages), max(a.ages)
+        lo_b, hi_b = min(b.ages), max(b.ages)
+        if max(hi_a, hi_b) - min(lo_a, lo_b) > 7:
+            if not (a.dob_yrs and b.byears and min(abs(x - y) for x in a.dob_yrs for y in b.byears) <= 1) and not (
+                b.dob_yrs and a.byears and min(abs(x - y) for x in b.dob_yrs for y in a.byears) <= 1
+            ):
+                return False
+        adiff = min(abs(x - y) for x in a.ages for y in b.ages)
+        if adiff <= 2:
             return True
-        if b.dob_yrs and a.byears and min(abs(x - y) for x in b.dob_yrs for y in a.byears) <= 1:
-            return True
-    return False
+        if adiff <= 5:
+            if a.dob_yrs and b.byears and min(abs(x - y) for x in a.dob_yrs for y in b.byears) <= 1:
+                return True
+            if b.dob_yrs and a.byears and min(abs(x - y) for x in b.dob_yrs for y in a.byears) <= 1:
+                return True
+        return False
+    if a.dob_yrs and b.byears and min(abs(x - y) for x in a.dob_yrs for y in b.byears) > 8:
+        return False
+    if b.dob_yrs and a.byears and min(abs(x - y) for x in b.dob_yrs for y in a.byears) > 8:
+        return False
+    return True
 
 
 def compatible(a: Cluster, b: Cluster) -> bool:
@@ -408,9 +419,12 @@ class Linker:
                 idx = by_id_multi[x]
                 if len(idx) > 250:
                     continue
+                need_names = x.startswith("E:")
                 reps: list[int] = []
                 for j in idx:
-                    if not any(self.union(r, j) for r in reps) and len(reps) < 32:
+                    if need_names and not self.cl[self.find(j)].names:
+                        continue
+                    if not any((not need_names or self.cl[self.find(r)].names) and self.union(r, j) for r in reps) and len(reps) < 32:
                         rj = self.find(j)
                         if rj not in reps:
                             reps.append(rj)

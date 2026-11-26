@@ -30,8 +30,18 @@ class Masker:
     def restore(self, t: str) -> str:
         if not self.store or _M0 not in t:
             return t
+        store = self.store
+        n_store = len(store)
+
+        def _repl(m):
+            try:
+                idx = int("".join(str(ord(c) - _MB) for c in m.group(1)))
+            except ValueError:
+                return m.group(0)
+            return store[idx] if 0 <= idx < n_store else m.group(0)
+
         for _ in range(6):
-            t = _MARK.sub(lambda m: self.store[int("".join(str(ord(c) - _MB) for c in m.group(1)))], t)
+            t = _MARK.sub(_repl, t)
             if _M0 not in t:
                 break
         return t
@@ -88,19 +98,21 @@ _NOOP_SUB = _NoopSub()
 class _TokenSetSub:
     """O(L) drop-in replacement for large single-token regex alternations."""
 
-    def __init__(self, tok_rx: re.Pattern, pure: frozenset[str], casefold: bool, fallback_rx: re.Pattern | None = None):
+    def __init__(self, tok_rx: re.Pattern, pure: frozenset[str], casefold: bool, fallback_rx: re.Pattern | None = None, ascii_skip: bool = False):
         self.tok_rx = tok_rx
         self.pure = pure
         self.casefold = casefold
         self.fallback_rx = fallback_rx
+        self.ascii_skip = ascii_skip
 
     def sub(self, repl, text: str) -> str:
         cf, p = self.casefold, self.pure
-        if not cf and self.fallback_rx is None and text.isascii():
+        if self.ascii_skip and self.fallback_rx is None and text.isascii():
             return text
+        is_call = callable(repl)
         def _fn(m):
             k = m.group(0).casefold() if cf else m.group(0)
-            return repl(m) if k in p else m.group(0)
+            return (repl(m) if is_call else repl) if k in p else m.group(0)
         out = self.tok_rx.sub(_fn, text)
         return self.fallback_rx.sub(repl, out) if self.fallback_rx is not None else out
 
@@ -290,8 +302,7 @@ class Sweeper:
             return re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(items, lambda n: sep.join(re.escape(p) for p in n.split()))})(?![A-Za-z])")
 
         def _compile_dev_full(items):
-            ws = r"\s+"
-            return re.compile(rf"(?<![{DEVA}])(?:{alt(items, lambda n: ws.join(re.escape(p) for p in n.split()))})(?![{DEVA}])")
+            return re.compile(rf"(?<![{DEVA}])(?:{alt(items, lambda n: sep.join(re.escape(p) for p in n.split()))})(?![{DEVA}])")
 
         def _compile_place(items):
             return re.compile(rf"(?i)(?<![A-Za-z{DEVA}])(?:{alt(items, lambda n: sep.join(re.escape(x) for x in n.split()))})(?![A-Za-z{DEVA}])")
@@ -323,7 +334,7 @@ class Sweeper:
             pure = frozenset(t for t in dev_tok if all("\u0900" <= c <= "\u097f" for c in t))
             other = [t for t in dev_tok if not all("\u0900" <= c <= "\u097f" for c in t)]
             fb = re.compile(rf"(?<![{DEVA}])(?:{alt(other, re.escape)})(?![{DEVA}])") if other else None
-            self.rx_dev_tok = _TokenSetSub(_RX_DEVA_WORD, pure, False, fb)
+            self.rx_dev_tok = _TokenSetSub(_RX_DEVA_WORD, pure, False, fb, ascii_skip=True)
 
         places = sorted((p for p in H.places if p not in H.safe_places), key=len, reverse=True)
         if not places:
@@ -354,8 +365,8 @@ class Sweeper:
 
 
 # ---------------------------------------------------------------- pieces
-RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,65536}={0,2}")
-RX_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{2}){6,128}(?![0-9A-Za-z])")
+RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{12,23}={1,2}|[A-Za-z0-9+/]{24,65536}={0,2})")
+RX_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{2}){6,4096}(?![0-9A-Za-z])")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
 RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|jillo|ji\.|jilha|जि\.?|ज़िला|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
@@ -372,7 +383,7 @@ RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+fro
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
 RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])[ \t]*[:\-.]?[ \t]*([A-Z][\w]*(?:[ \t]+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)[ \t]*[:\-]?[ \t]*([{DEVA}]+(?:[ \t]+[{DEVA}]+){{0,2}})|\b([A-Z][a-z]{{3,}}(?:\s+[A-Z][a-z]{{3,}})?)\s+Post\b")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[\"']?\s*[:\-=]?\s*[\"']?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-\"'(])([1-8]\d{2})\s?(\d{3})(?=[\"'\s),;\]}\n]|$)")
-RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)(-?[{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
+RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)(-?[{INDIC_DIG}]{{1,3}}(?![{INDIC_DIG}]|\s*[-–]\s*[{INDIC_DIG}]))(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
                     rf"|(?<![\w.x×\-])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
 RX_URL = re.compile(r"(?i)\b(?:https?://|wa\.me/)[^\s\"'<>,;)]+|\btel:[+\d()\- ]{5,22}\d|\burn:(?:uuid|oid):[\w.\-]+")
 RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|y|वर्ष|साल|saal|sal|vayas\w*|prayam)\b\.?(?:\s*old)?)(?=\s*[,/|;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|purushan|stree|sthree|पुरुष|महिला|$|,|\||/|\)|;))")
@@ -391,8 +402,8 @@ def _name_ok(toks: list[str]) -> bool:
     if not toks:
         return False
     for t in toks:
-        tl = t.strip(".").lower()
-        if tl in COMMON_WORDS or tl in L.CLINICAL_WORDS or tl in L.MED_ACRONYMS or re.search(r"\d", t):
+        tl = t.strip(".,;:").lower()
+        if tl in COMMON_WORDS or tl in L.CLINICAL_WORDS or tl in L.MED_ACRONYMS or tl in _KIN_STATUS_WORDS or re.search(r"\d", t):
             return False
     if len(toks) == 1 and toks[0].isupper() and len(toks[0]) <= 3:
         return False
@@ -444,26 +455,45 @@ def generalize_address(value: str, band_pin: bool = False) -> str:
 _HOMOGLYPHS = str.maketrans({
     "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I",
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ѕ": "s", "ј": "j",
+    "ο": "o", "Ο": "O", "α": "a", "ν": "v", "ι": "i", "κ": "k", "ρ": "p", "τ": "t",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
 })
-_NONCONF_CYR = re.compile(r"[\u0400-\u04FF]")
-_HOMO_TOK = re.compile(r"[A-Za-z0-9\u0400-\u04FF]{2,}")
+_NONCONF_LOOK = re.compile(r"[\u0370-\u03FF\u0400-\u04FF]")
+_HOMO_TOK = re.compile(r"[A-Za-z0-9\u0370-\u03FF\u0400-\u04FF]{2,}")
+_RX_LAT_DIAC = re.compile(r"[^\x00-\x7F]+")
 _RX_UESC = re.compile(r"\\u([0-9a-fA-F]{4})")
 _RX_HTML_NUM = re.compile(r"&#(?:x([0-9a-fA-F]{2,4})|(\d{2,5}));")
-_RX_PCT = re.compile(r"(?:%[0-9a-fA-F]{2}){2,}")
+_RX_PCT = re.compile(r"(?:%[0-9a-fA-F]{2})+")
+_RX_LATIN_ACC = re.compile(r"[\u00C0-\u024F\u0300-\u036F]")
+
+
+def _strip_latin_accents(s: str) -> str:
+    nfd = unicodedata.normalize("NFD", s)
+    out = []
+    in_latin = False
+    for ch in nfd:
+        o = ord(ch)
+        if 0x0300 <= o <= 0x036F and in_latin:
+            continue
+        in_latin = ("A" <= ch <= "Z" or "a" <= ch <= "z")
+        out.append(ch)
+    return unicodedata.normalize("NFC", "".join(out))
 
 
 def _decode_hidden(text: str) -> str:
-    """Normalise zero-width joiners, homoglyph spoofs, unicode/HTML/percent escapes before scrubbing."""
+    """Normalise zero-width joiners, homoglyph spoofs, Latin diacritics, unicode/HTML/percent escapes before scrubbing."""
     t = text
     if not t.isascii():
         t = re.sub(r"[\u200b\u2060\ufeff]", "", t)
         t = re.sub(r"(?<=[A-Za-z0-9])[\u200c\u200d]+(?=[A-Za-z0-9])", "", t)
-        if _NONCONF_CYR.search(t):
+        if _NONCONF_LOOK.search(t):
             def _fix_homo(m):
                 tok = m.group(0)
                 rep = tok.translate(_HOMOGLYPHS)
-                return rep if not _NONCONF_CYR.search(rep) else tok
+                return rep if not _NONCONF_LOOK.search(rep) else tok
             t = _HOMO_TOK.sub(_fix_homo, t)
+        if _RX_LATIN_ACC.search(t):
+            t = _strip_latin_accents(t)
     if "\\u" in t:
         def _uesc(m):
             cp = int(m.group(1), 16)
@@ -524,6 +554,18 @@ def b64_scrub(tok: str, ctx: "Ctx", sw: "Sweeper") -> str:
     return base64.b64encode(clean.encode("utf-8")).decode("ascii")
 
 
+_EPONYM_GATE = ("disease", "syndrome", "palsy", "catheter", "lactate", "sign", "lymphoma",
+                 "score", "coma", "reflex", "maneuver", "point", "tract", "esophagitis", "test")
+_RX_FAMILY_ID_HEAD = re.compile(r"(?i)^(?:Ration|KASP|Chirayu|PPP)\b")
+_KIN_STATUS_WORDS = {"self", "farmer", "housewife", "expired", "deceased", "unknown", "none", "nil", "na", "absent", "present", "available", "unavailable", "worker", "labourer", "business", "student", "retired"}
+_WO_SO_CLIN = re.compile(
+    r"(?i)^(?:crepit\w*|rhonchi|wheeze|murmur\w*|tender\w*|rigid\w*|guarding|organomegaly|cyanosis|pallor|icterus|"
+    r"clubbing|lymphadenopathy|edema|oedema|deficit\w*|complication\w*|distress|consolidat\w*|effusion|fracture|"
+    r"infiltrat\w*|pneumonia|tuberculosis|tb|malignan\w*|abscess|infarct\w*|ischem\w*|ischaem\w*|hepatomegaly|"
+    r"splenomegaly|cardiomegaly|appendicitis|cholecystitis|obstruct\w*|perforat\w*|hemorrhag\w*|haemorrhag\w*|"
+    r"infection|lesion\w*|mass|nodule\w*|opacit\w*|collapse|ascites|pedal|epigastric|dry|acute|chronic|"
+    r"dyspnoea|dyspnea|चक्कर|सूजन|दस्त|घबराहट|बेचैनी|जकड़न)$"
+)
 _SAFE_URL_HOSTS = ("hl7.org", "snomed.info", "loinc.org", "w3.org", "abdm.gov.in", "nrces.in", "unitsofmeasure.org", "fhir.org")
 _SAFE_URL_WORDS = {"discharge", "summary", "report", "nursing", "notes", "rx", "lab", "opd", "ipd", "bundle",
                    "export", "visits", "patients", "results", "claims", "registration", "file", "data", "json",
@@ -650,7 +692,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         def _put_if_changed(fn, m):
             s = fn(m.group(0), ctx, sw)
             return put(s) if s != m.group(0) else m.group(0)
-        if len(t) >= 24:
+        if len(t) >= 16:
             t = RX_B64.sub(lambda m: _put_if_changed(b64_scrub, m), t)
         t = RX_HEX.sub(lambda m: _put_if_changed(hex_scrub, m), t)
 
@@ -689,6 +731,10 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         t = RX_DOTTED_PHONE.sub(red("[PHONE]"), t)
     t = sw.rx_ids.sub(lambda m: (st.__setitem__("identifiers", st["identifiers"] + 1), put(ctx.psn or "[ID]"))[1], t)
 
+    if (has_dig or "asha" in t_low or "'" in t or not t_ascii or any(w in t_low for w in _EPONYM_GATE)) and os.environ.get("RAKSHAK_P_CLINICAL_PROTECT") != "off":   # ablation switch
+        for rx in L_CLIN:
+            t = rx.sub(lambda m: put(m.group(0)), t)
+
     if has_dig:
         def digrun(m):
             kind = classify_digits(m.group(1))
@@ -710,12 +756,9 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
 
         def idlab(m):
             st["identifiers"] += 1
-            return m.group(0)[: m.start(1) - m.start(0)] + put(ctx.psn or "[ID]")
+            rep = "[ID]" if _RX_FAMILY_ID_HEAD.match(m.group(0)) else (ctx.psn or "[ID]")
+            return m.group(0)[: m.start(1) - m.start(0)] + put(rep)
         t = RX_ID_LABEL.sub(idlab, t)
-
-    if (has_dig or "asha" in t_low or "'" in t or not t_ascii) and os.environ.get("RAKSHAK_P_CLINICAL_PROTECT") != "off":   # ablation switch
-        for rx in L_CLIN:
-            t = rx.sub(lambda m: put(m.group(0)), t)
 
     # 5. labelled names / kinship / honorifics
     def lab(m):
@@ -782,7 +825,13 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         toks = clean_name_seq(seq)
         if not toks:
             return m.group(0)
-        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
+        t0_clean = toks[0].rstrip(".,;:").lower()
+        if any(tok.rstrip(".,;:").lower() in _KIN_STATUS_WORDS for tok in toks):
+            return m.group(0)
+        if rel.upper().startswith(("C/O", "S/O", "H/O", "W/O")) and (
+            L.COMPLAINT_WORDS.match(t0_clean) or _WO_SO_CLIN.match(t0_clean) or t0_clean in L.CLINICAL_WORDS
+            or (toks[0][:1].isascii() and toks[0][:1].islower())
+        ):
             return m.group(0)
         if not _name_ok(toks):
             return m.group(0)

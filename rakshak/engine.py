@@ -38,8 +38,13 @@ _ALPH = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 # ============================================================== keyed helpers
+def _secret() -> bytes:
+    val = os.environ.get("RAKSHA_SECRET")
+    return val.encode("utf-8") if val else SECRET
+
+
 def hk(*parts: str) -> bytes:
-    return hmac.new(SECRET, "|".join(parts).encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(_secret(), "|".join(parts).encode("utf-8"), hashlib.sha256).digest()
 
 
 def pseudonym(key: str) -> str:
@@ -397,7 +402,7 @@ def parse_date(s: str, order: str) -> dt.date | None:
 
 
 # ============================================================== identifier patterns
-RX_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
+RX_EMAIL = re.compile(r"(?i)[\w.+\-]+@(?:[\w\-]+(?:\.[\w\-]+)+|(?:abdm|sbx|ndhm|nha)\b)")
 RX_PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Za-z0-9])")
 RX_DOTTED_AADHAAR = re.compile(r"(?<![\d.])\d{4}\.\d{4}\.\d{4}(?![\d.])")
 RX_DOTTED_PHONE = re.compile(r"(?<![\d.])(?:\+?91[\s.\-]?)?[6-9]\d{4}[.·]\d{5}(?![\d.])|(?<![\d.])[6-9]\d{2}[.·]\d{3}[.·]\d{4}(?![\d.])")
@@ -430,7 +435,11 @@ def classify_digits(run: str) -> str | None:
         return "ABHA"
     if n == 12 and groups in ([12], [4, 4, 4]) and not (d.startswith("91") and d[2] in "6789" and groups != [4, 4, 4]):
         return "AADHAAR"
-    core = d[2:] if n == 12 and d.startswith("91") else d[1:] if n == 11 and d[0] == "0" else d
+    core = (
+        d[4:] if n == 14 and d.startswith("0091") else
+        d[2:] if n == 12 and d.startswith("91") else
+        d[1:] if n == 11 and d[0] == "0" else d
+    )
     if len(core) == 10 and core[0] in "6789" and (all(g >= 2 for g in groups) or groups == [n]):
         return "PHONE"
     if n == 10 and d[0] == "0" and max(groups) <= 6:
@@ -459,17 +468,21 @@ def id_digits_ok(tok: str) -> bool:
 CLIN_PROTECT = [
     re.compile(r"(?i)\b(?:BP|B\.P\.)\s*[:\-]?\s*\d{2,3}\s*/\s*\d{2,3}(?:\s*mm\s*hg)?"),
     re.compile(r"(?i)\b\d{2,3}\s*/\s*\d{2,3}\s*mm\s*hg"),
-    re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg/dl|g/dl|mmol/l|meq/l|iu/l|u/l|ng/ml|pg/ml|mg|mcg|ml|gm|g|iu|units?|%|/min|bpm|°f|°c|f\b|kg|cm|mm|/\s*cumm|/\s*cu\.?\s*mm|/\s*mm3|/\s*ul|cells(?:/[\w.]+)?)(?!\w)"),
+    re.compile(r"(?i)\b\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?\s*(?:mg/dl|g/dl|mmol/l|meq/(?:\d+\s*)?ml|meq/l|iu/l|u/l|ng/ml|pg/ml|mg|mcg|ml|gm|g|iu|units?|%|/min|bpm|°f|°c|f\b|kg|cm|mm|/\s*cumm|/\s*cu\.?\s*mm|/\s*mm3|/\s*ul|cells(?:/[\w.]+)?)(?!\w)"),
     re.compile(r"\b[0-4]-[0-4]-[0-4](?:-[0-4])?\b"),
     re.compile(r"(?i)\bx\s*\d+\s*(?:days?|wks?|weeks?|months?|yrs?|years?|din|hafte)\b"),
     re.compile(r"\b[A-TV-Z]\d{2}(?:\.\d{1,2})?\b"),        # ICD-10
     re.compile(r"(?i)\b(?:Ward|वार्ड)\s*\d+\s*\([^)]{2,30}\)"),
     re.compile(r"(?i)\bBed\s*(?:No\.?)?\s*\d+\b"),
-    re.compile(r"\bASHA\b|(?i:\basha\s+(?:workers?|sahayika|facilitator))"),
+    re.compile(r"(?<![:\-=]\s)\bASHA\b(?![ \t]+(?:[A-Z]{2,}|[A-Z][a-z]+))|(?i:\basha\s+(?:workers?|sahayika|facilitator|did[iy]?))|आशा\s+(?:कार्यकर्ता|सहयोगिनी|दीदी)"),
     re.compile(r"(?i)\b(?:CPAP|BiPAP|PEEP|CVP|ICP|PSV)\s*[:=]?\s*\d+(?:\s*/\s*\d+)?"),
-    re.compile(r"(?i)\b(?:Addison|Cushing|Parkinson|Hodgkin|Graves|Hashimoto|Raynaud|Bell|Alzheimer|Barrett|Crohn|Marfan|Foley|Ringer|Babinski|McBurney|Apgar|Glasgow|Kernig|Brudzinski|Trousseau|Chvostek|Murphy|Kocher)(?:'s)?\s+(?:disease|syndrome|catheter|lactate|sign|palsy|lymphoma|score|coma|test|reflex|maneuver|esophagitis|tract|point)\b"),
+    re.compile(r"(?i)\b(?:Addison|Cushing|Parkinson|Hodgkin|Graves|Hashimoto|Raynaud|Bell|Alzheimer|Barrett|Crohn|Marfan|Foley|Ringer|Babinski|McBurney|Apgar|Glasgow|Kernig|Brudzinski|Trousseau|Chvostek|Murphy|Kocher)(?:'s|s'|')?\s+(?:disease|syndrome|catheter|lactate|sign|palsy|lymphoma|score|coma|test|reflex|maneuver|esophagitis|tract|point)\b"),
 ]
-RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSis\.|\bSN\.?|\bN/O|\bSister|\bStaff[ \t]+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)[ \t]*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:[ \t]+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
+RX_DOCTOR = re.compile(
+    rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSis\.|\bSN\.?|\bN/O|\bSister|\bStaff[ \t]+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)"
+    rf"[ \t]*(?:[A-Z][a-zA-Z.']+|(?!(?:ने|को|के|की|का|से|द्वारा|में|पर|हैं|था|थी|मरीज़|मरीज|रोगी)(?![{DEVA}]))[{DEVA}]+)"
+    rf"(?:[ \t]+(?:[A-Z][a-zA-Z.']+|(?!(?:ने|को|के|की|का|से|द्वारा|में|पर|हैं|था|थी|मरीज़|मरीज|रोगी)(?![{DEVA}]))[{DEVA}]+)){{0,2}}"
+)
 
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"
