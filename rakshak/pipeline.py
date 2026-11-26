@@ -865,6 +865,34 @@ def verify_text(text: str, crit: list[str]) -> tuple[str, int]:
     return text, hits
 
 
+# ================================================================ time budget (fail-safe against pathological inputs)
+import signal
+from contextlib import contextmanager
+
+FILE_BUDGET_S = 45
+
+
+class BudgetExceeded(Exception):
+    pass
+
+
+@contextmanager
+def time_budget(seconds: int):
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _raise(signum, frame):
+        raise BudgetExceeded()
+    old = signal.signal(signal.SIGALRM, _raise)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
 # ================================================================ main
 def peak_rss_mb() -> float:
     try:
@@ -883,8 +911,8 @@ def load_policy(path: Path) -> dict:
             if ":" in line:
                 k, v = (x.strip() for x in line.split(":", 1))
                 pol[k] = int(v) if v.lstrip("-").isdigit() else v
-    for k, v in os.environ.items():            # experiment overrides: RAKSHAK_P_<key>=<value>
-        if k.startswith("RAKSHAK_P_"):
+    for k, v in os.environ.items():            # experiment overrides (ignored unless RAKSHAK_EXPERIMENT=1)
+        if k.startswith("RAKSHAK_P_") and os.environ.get("RAKSHAK_EXPERIMENT") == "1":
             pol[k[10:].lower()] = int(v) if v.lstrip("-").isdigit() else v
     return pol
 
@@ -895,14 +923,23 @@ def run(inp: Path, out: Path, policy: dict) -> int:
     st = Stats()
     H = Harvest()
     jobs = []
-    for path in sorted((p for p in inp.rglob("*") if p.is_file()), key=lambda p: p.relative_to(inp).as_posix()):
+    paths = [p for p in inp.rglob("*") if p.is_file() or p.is_symlink()]
+    for path in sorted(paths, key=lambda p: p.relative_to(inp).as_posix()):
         rel = path.relative_to(inp).as_posix()
+        unreadable = path.is_symlink()            # never follow links out of the input tree
         try:
-            raw = path.read_bytes()
+            raw = b"" if unreadable else path.read_bytes()
         except OSError:
-            raw = b""
+            raw, unreadable = b"", True
         job = FileJob(rel, raw)
-        pass1(job, H)
+        if unreadable:
+            job.status, job.reason = "quarantined", "unreadable"
+        else:
+              with time_budget(FILE_BUDGET_S):
+                try:
+                    pass1(job, H)
+                except BudgetExceeded:
+                    job.status, job.reason, job.recs = "quarantined", "processing_timeout", []
         jobs.append(job)
 
     # date order for ambiguous files: vote by path tokens of files with evidence
@@ -926,7 +963,10 @@ def run(inp: Path, out: Path, policy: dict) -> int:
             d = parse_date(r.ev["dob"], j_order)
             r.ev["dob"] = d.isoformat() if d else None
     # guard_ids(recs) measured harmful (dev link recall 0.94 -> 0.50); kept for reference only
-    roots = Linker([r.ev for r in recs]).run()
+    if str(policy.get("link", "on")) == "off":           # ablation only
+        roots = list(range(len(recs)))
+    else:
+        roots = Linker([r.ev for r in recs]).run()
     groups = defaultdict(list)
     for r, g in zip(recs, roots):
         groups[g].append(r)
@@ -980,57 +1020,59 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if j.status != "sanitized":
             continue
         try:
-            if j.kind == "jsonl":
-                lines = []
-                for r, obj in zip(j.recs, j.data):
-                    c = ctx_for(r, j)
-                    if isinstance(obj, (dict, list)):
-                        lines.append(json.dumps(rw.walk(obj, None, c, r), ensure_ascii=False))
-                    else:
-                        lines.append(scrub_text(obj, c, sw))
-                result = "\n".join(lines) + "\n"
-            elif j.kind == "json":
-                if j.rec_ptrs:
-                    meta_ctx = ctx_for(None, j)
-                    data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
-                else:
-                    r = j.doc_rec
-                    data = rw.walk(j.data, None, ctx_for(r, j), r)
-                result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
-            if j.kind in ("jsonl", "json"):
-                pass
-            elif j.kind == "table":
-                buf = io.StringIO()
-                w = csv.writer(buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")
-                hctx = ctx_for(None, j)
-                header = [scrub_text(h, hctx, sw) for h in j.rows[0]]
-                w.writerow(header)
-                name_cols = [ci for ci, k in enumerate(j.colkinds) if k == "NAME"]
-                for i, row in enumerate(j.rows[1:]):
-                    r = j.recs[i]
-                    c = ctx_for(r, j)
-                    new_row = []
-                    ragged = len(row) != len(j.colkinds)
-                    for ci, v in enumerate(row):
-                        k = j.colkinds[ci] if ci < len(j.colkinds) else None
-                        if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE"):
-                            new_row.append(scrub_text(v, c, sw))
-                            continue
-                        if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
-                            st["identifiers"] += 1
-                            new_row.append("")
-                            continue
-                        new_row.append(rw.value(v, k, c, r))
-                    w.writerow(new_row)
-                result = buf.getvalue()
-            else:
-                r = j.doc_rec
-                c = ctx_for(r, j)
-                result = scrub_text(j.text, c, sw)
-                if r is not None and r.pid and r.pid not in result:
-                    result = f"Patient: {r.pid}\n" + result
-            result, hits = verify_text(result, crit)
-            st["verify_hits"] += hits
+          with time_budget(FILE_BUDGET_S):
+              if j.kind == "jsonl":
+                  lines = []
+                  for r, obj in zip(j.recs, j.data):
+                      c = ctx_for(r, j)
+                      if isinstance(obj, (dict, list)):
+                          lines.append(json.dumps(rw.walk(obj, None, c, r), ensure_ascii=False))
+                      else:
+                          lines.append(scrub_text(obj, c, sw))
+                  result = "\n".join(lines) + "\n"
+              elif j.kind == "json":
+                  if j.rec_ptrs:
+                      meta_ctx = ctx_for(None, j)
+                      data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
+                  else:
+                      r = j.doc_rec
+                      data = rw.walk(j.data, None, ctx_for(r, j), r)
+                  result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
+              if j.kind in ("jsonl", "json"):
+                  pass
+              elif j.kind == "table":
+                  buf = io.StringIO()
+                  w = csv.writer(buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")
+                  hctx = ctx_for(None, j)
+                  header = [scrub_text(h, hctx, sw) for h in j.rows[0]]
+                  w.writerow(header)
+                  name_cols = [ci for ci, k in enumerate(j.colkinds) if k == "NAME"]
+                  for i, row in enumerate(j.rows[1:]):
+                      r = j.recs[i]
+                      c = ctx_for(r, j)
+                      new_row = []
+                      ragged = len(row) != len(j.colkinds)
+                      for ci, v in enumerate(row):
+                          k = j.colkinds[ci] if ci < len(j.colkinds) else None
+                          if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE"):
+                              new_row.append(scrub_text(v, c, sw))
+                              continue
+                          if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
+                              st["identifiers"] += 1
+                              new_row.append("")
+                              continue
+                          new_row.append(rw.value(v, k, c, r))
+                      w.writerow(new_row)
+                  result = buf.getvalue()
+              else:
+                  r = j.doc_rec
+                  c = ctx_for(r, j)
+                  result = scrub_text(j.text, c, sw)
+                  if r is not None and r.pid and r.pid not in result:
+                      result = f"Patient: {r.pid}\n" + result
+              if str(policy.get("verify", "on")) != "off":     # ablation switch; always on in config
+                  result, hits = verify_text(result, crit)
+                  st["verify_hits"] += hits
         except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
             j.status, j.reason = "quarantined", "processing_error"
             continue

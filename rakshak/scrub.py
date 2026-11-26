@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import re
 
 from . import lexicon as L
@@ -75,7 +76,7 @@ class Sweeper:
 
 
 # ---------------------------------------------------------------- pieces
-RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
+RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,65536}={0,2}")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
 RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|ji\.|jilha|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
@@ -222,8 +223,9 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(1) - m.start(0)] + put(ctx.psn or "[ID]")
     t = RX_ID_LABEL.sub(idlab, t)
 
-    for rx in L_CLIN:
-        t = rx.sub(lambda m: put(m.group(0)), t)
+    if os.environ.get("RAKSHAK_P_CLINICAL_PROTECT") != "off":   # ablation switch
+        for rx in L_CLIN:
+            t = rx.sub(lambda m: put(m.group(0)), t)
 
     # 5. labelled names / kinship / honorifics
     def lab(m):
