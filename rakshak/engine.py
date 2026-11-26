@@ -180,7 +180,7 @@ _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "Au
 RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2}|\d{2})(?![\d/.\-])")
 RX_ISO = re.compile(r"(?<![\d/.\-])((?:19|20)\d{2})([-/.])(\d{2})\2(\d{2})(?![\d/.\-])")
 RX_ISO8 = re.compile(r"(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")
-RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
+RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+(?:of\s+)?)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
                       r"(,?[\s\-/.]+)((?:19|20)?\d{2})\b")
 RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)([\s\-/]+)(\d{1,2})(st|nd|rd|th)?(,?[\s\-/]+)((?:19|20)\d{2})\b")
 
@@ -259,7 +259,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         n = d + delta
         name = m.group(4) + m.group(5)
         new_mon = _MON_FULL[n.month - 1]
-        if len(name.rstrip(".")) <= 4:
+        if len(name.rstrip(".")) <= 3 or name.endswith("."):
             new_mon = new_mon[:3] + ("." if name.endswith(".") else "")
         if name.isupper():
             new_mon = new_mon.upper()
@@ -267,7 +267,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         if m.group(2) and m.group(2).isupper():
             suf = suf.upper()
         ys = str(n.year) if len(yy) == 4 else f"{n.year % 100:02d}"
-        ds = f"{n.day:02d}" if len(m.group(1)) == 2 else str(n.day)
+        ds = f"{n.day:02d}" if len(m.group(1)) == 2 and not m.group(2) else str(n.day)
         return w(f"{ds}{suf}{m.group(3)}{new_mon}{m.group(6)}{ys}")
 
     def textm(m):
@@ -278,7 +278,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         n = d + delta
         name = m.group(1) + m.group(2)
         new_mon = _MON_FULL[n.month - 1]
-        if len(name.rstrip(".")) <= 4:
+        if len(name.rstrip(".")) <= 3 or name.endswith("."):
             new_mon = new_mon[:3] + ("." if name.endswith(".") else "")
         if name.isupper():
             new_mon = new_mon.upper()

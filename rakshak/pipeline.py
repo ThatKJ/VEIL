@@ -221,6 +221,36 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
                     H.add_place(pp)
 
 
+RX_KV = re.compile(r"(?m)^([ \t]*\|[ \t]*)([^|\n]{1,40}?)([ \t]*\|[ \t]*)([^|\n]+?)([ \t]*\|[ \t]*)$"
+                   r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:\n|]{0,30}?)(\**[ \t]*[:：][ \t]*\**)([^\n]+?)([ \t]*)$")
+KV_KINDS = {"NAME", "REL_NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "DOB", "AGE", "VILLAGE",
+            "ADDRESS", "PIN"}
+
+
+def _kv_kind(label: str, value: str):
+    k = kind_of_key(label.strip(" *"))
+    if k in ("NAME", "REL_NAME") and (re.search(r"\d", value) or not re.search(r"[A-Za-z\u0900-\u097F]{2}", value)):
+        return None                  # "Pt: 30y | M" is an age line, not a name
+    return k if k in KV_KINDS else None
+
+
+_NEXT_LABEL = re.compile(r"\s{2,}(?=[^\s:：][^:：\n]{0,30}[:：])|\s+[-–]\s+(?=[A-Z])")
+
+
+def kv_rows(text):
+    """Label/value rows inside free text: Markdown/pipe tables and 'Label: value' lines.
+    Yields (label, value, value_start, value_end); a colon value stops where the next label begins."""
+    for m in RX_KV.finditer(text):
+        if m.group(2) is not None:
+            yield m.group(2), m.group(4), m.start(4), m.end(4)
+        else:
+            v = m.group(9)
+            cut = _NEXT_LABEL.search(v)
+            if cut:
+                v = v[:cut.start()]
+            yield m.group(7), v, m.start(9), m.start(9) + len(v)
+
+
 RX_ICD = re.compile(r"\b([A-TV-Z]\d{2}(?:\.\d{1,2})?)\b")
 COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "procedures", "impression", "icd",
             "disease", "illness", "surgery", "operation", "rog", "बीमारी", "निदान"}
@@ -234,6 +264,10 @@ _PAT_HON_RX = re.compile(
 
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     e = rec.ev
+    for lab, val, _, _ in kv_rows(text):
+        k = _kv_kind(lab, val)
+        if k and k not in ("ADDRESS", "PIN"):
+            add_ev(rec, H, k, val.strip(" *"), order=order)
     for m in RX_ICD.finditer(text):
         e.setdefault("conds", set()).add(m.group(1))
     first_label = None
@@ -1028,6 +1062,26 @@ def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None, out_path=(),
             for i, v in enumerate(node)]
 
 
+def kv_rewrite(text: str, rw, ctx, rec) -> str:
+    """Apply field-kind rules to label/value rows found in free text (dates are left to the scrubber,
+    which shifts every date exactly once; a DOB that policy drops is removed here)."""
+    out, last = [], 0
+    for lab, v, a, b in kv_rows(text):
+        k = _kv_kind(lab, v)
+        if not k:
+            continue
+        if k == "DOB" and not (ctx.rule is not None and ctx.rule.dob == "year_drop"):
+            continue
+        nv = rw.value(v.strip(" *"), k, ctx, rec)
+        if nv == v.strip(" *"):
+            continue
+        out.append(text[last:a])
+        out.append(str(nv))
+        last = b
+    out.append(text[last:])
+    return "".join(out)
+
+
 # ================================================================ filenames
 _DATELIKE = re.compile(r"(?:19|20)\d{2}(?:[_\-.]\d{1,2}){0,2}|\d{1,2}[_\-.]\d{1,2}[_\-.](?:19|20)\d{2}")
 
@@ -1376,7 +1430,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
               else:
                   r = j.doc_rec
                   c = ctx_for(r, j)
-                  result = scrub_text(j.text, c, sw)
+                  result = scrub_text(kv_rewrite(j.text, rw, c, r), c, sw)
                   if r is not None and r.pid and r.pid not in result:
                       result = f"Patient: {r.pid}\n" + result
               if str(policy.get("verify", "on")) != "off":     # ablation switch; always on in config
