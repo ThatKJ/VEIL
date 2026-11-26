@@ -86,6 +86,16 @@ def child_kind(key: str, parent: str | None) -> str | None:
     return k
 
 
+def ext_value_kind(obj: dict) -> str | None:
+    """FHIR extensions carry their meaning in `url` (e.g. .../mothers-name)."""
+    url = obj.get("url")
+    if isinstance(url, str) and any(k.startswith("value") for k in obj):
+        k = kind_of_key(url.rstrip("/").rsplit("/", 1)[-1])
+        if k and k not in ("SAFE", "STRUCT", "DATE"):
+            return k
+    return None
+
+
 def shape_kind(values: list[str]) -> str | None:
     vals = [v.strip() for v in values if isinstance(v, str) and v.strip()][:50]
     if len(vals) < 2:
@@ -273,8 +283,9 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
         elif rt == "Patient":
             rk = None
         base = rk if rk else kind
+        ext_kind = ext_value_kind(obj)
         for k, v in obj.items():
-            ck = child_kind(k, base)
+            ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
             if k == "gender" or set(L.key_tokens(k)) & GENDER_TOK:
                 g = gender_of(v) if isinstance(v, str) else None
                 if g:
@@ -504,9 +515,10 @@ class Rewriter:
             elif rt == "Patient":
                 rk = None
             base = rk if rk else kind
+            ext_kind = ext_value_kind(obj)
             out, seen = {}, set()
             for k, v in obj.items():
-                ck = child_kind(k, base)
+                ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
                 toks = set(L.key_tokens(k))
                 if toks & GENDER_TOK and not isinstance(v, (dict, list)):
                     ck = "GENDER"

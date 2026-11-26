@@ -83,7 +83,7 @@ HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
                        "prasad", "singh", "shri", "smt", "sahab", "didi", "देवी", "कुमार", "कुमारी", "जी"}
 
-KIN = r"(?:S/O|D/O|W/O|H/O|F/O|M/O|C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|पुत्र|पुत्री|पत्नी|पति|पिता|माता|बेटा|बेटी)"
+KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|पुत्र|पुत्री|पत्नी|पति|पिता|माता|बेटा|बेटी)"
 
 # Words that may follow "C/O" when it means "complaint of"
 COMPLAINT_WORDS = re.compile(
@@ -103,7 +103,7 @@ FIELD_RULES = [
     ("PHONE", r"phone\w*|mobile\w*|mob|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
     ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|reg|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
-            r"पंजीकरण|पंजीयन|recordno|caseno|ipno|identifier|ref|mr"),
+            r"पंजीकरण|पंजीयन|recordno|caseno|ipno|identifier|patientref|patref|mr"),
     ("DOB", r"dob|birth\w*|birthdate|janm|जन्म|dateofbirth"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
     ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|"
@@ -143,6 +143,8 @@ def classify_key(key: str) -> str | None:
         return "DOB"
     if any(_DATE_TOK.fullmatch(t) for t in toks):
         return "DATE"
+    if any(t in ("address", "addr", "pata", "पता", "residence") for t in toks):
+        return "ADDRESS"
     for kind, rx in FIELD_RX:
         if any(rx.fullmatch(t) for t in toks) or rx.fullmatch(joined):
             return kind
@@ -164,3 +166,27 @@ CLINICAL_WORDS = {
     "medicine", "surgery", "ward", "bed", "icu", "opd", "ipd", "diabetes", "hypertension", "anaemia",
     "anemia", "tuberculosis", "typhoid", "malaria", "dengue", "pneumonia", "fracture", "cataract",
 }
+
+
+# Medical / administrative acronyms that look like names in caps (never redact)
+MED_ACRONYMS = {"tb", "dm", "dm2", "htn", "ckd", "copd", "cad", "ihd", "mi", "cva", "uti", "aki", "ards", "hiv",
+                "hbsag", "hcv", "ecg", "ekg", "usg", "ct", "mri", "cbc", "lft", "kft", "rft", "esr", "crp", "rbs",
+                "fbs", "ppbs", "hba1c", "icu", "nicu", "ot", "er", "opd", "ipd", "anm", "aww", "phc",
+                "chc", "pmjay", "abha", "uhid", "mrn", "bp", "spo2", "ors", "iv", "im", "sos", "bd", "od", "tds",
+                "na", "nil", "ncd", "dengue", "covid"}
+
+# Common Indian surnames / family names (written for this project; used ONLY as a context cue:
+# "Capitalised-word + known surname" is treated as a person name).
+SURNAMES = set("""
+agarwal aggarwal ahmad ahmed alam ali ansari arora awasthi bajpai bajwa banerjee bano begum bhardwaj bhatt bhatia
+bose chaudhary chaudhari chauhan chopra das dasgupta desai dixit dubey dwivedi fernandes gandhi garg ghosh gill goel
+gupta haider hussain iyer jain jaiswal jha joshi kapoor kaur khan khanna khatri kulkarni kumari kushwaha lal lodhi
+malhotra masih mehta mishra mittal mukherjee nair nambiar naqvi nishad pandey patel pathak pillai prajapati qadri
+qureshi rai rajput rana rao rathore rawat reddy rizvi saxena sen sengupta shah sharma shaikh shukla siddiqui singh
+sinha solanki srivastava sahu tiwari tripathi trivedi upadhyay verma yadav zaidi chaturvedi maurya kashyap kohli
+sethi sood bisht negi rawal thakur thakkar parmar chawla bhatnagar mathur nigam kesarwani gautam jatav valmiki
+paswan manjhi mahto kurmi pal baghel tomar sengar bundela bhadauria sisodia ranawat shekhawat rathod chavan pawar
+jadhav shinde patil deshmukh gaikwad more naik menon panicker kurup warrier namboodiri iyengar subramanian krishnan
+ramachandran venkatesh murthy gowda hegde shetty pai kamath bhat fernandes dsouza dcosta pereira gomes rodrigues
+lobo sequeira mascarenhas francis thomas joseph varghese mathew george kurian abraham chacko cherian
+""".split())

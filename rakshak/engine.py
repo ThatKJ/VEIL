@@ -247,29 +247,29 @@ def parse_date(s: str, order: str) -> dt.date | None:
 RX_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 RX_PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Za-z0-9])")
 RX_MASKED_AADHAAR = re.compile(r"(?i)(?<![\w])[x*•]{4}[\s\-]?[x*•]{4}[\s\-]?\d{4}(?!\d)")
-RX_DIGITRUN = re.compile(r"(?<![\w/.:])(\+?\d[\d\s\-]{6,}\d)(?![\w/.:])")
+RX_DIGITRUN = re.compile(r"(?<![\w/:])(?<!\d\.)(\+?[0-9०-९][0-9०-९\s\-]{6,}[0-9०-९])(?![\w/:]|\.\d)")
 # Hospital / insurance style IDs: letters + >=4 digits, with optional / - separators
 RX_IDTOK = re.compile(r"(?<![\w/\-])(?=[\w/\-]*\d{3})(?=[\w/\-]*[A-Za-z])[A-Za-z]{1,8}[A-Za-z0-9]*(?:[/\-][A-Za-z0-9]+)+(?![\w/\-])"
                       r"|(?<![\w/\-])[A-Za-z]{2,8}\d{5,}(?![\w/\-])")
 
 
+_INDIC_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
 def classify_digits(run: str) -> str | None:
+    run = run.translate(_INDIC_DIGITS)
+    groups = [len(g) for g in re.findall(r"\d+", run)]
     d = re.sub(r"\D", "", run)
     n = len(d)
-    if n == 14:
+    if n == 14 and groups in ([14], [2, 4, 4, 4]):
         return "ABHA"
-    if n == 12 and d.startswith("91") and d[2] in "6789":
-        return "PHONE"
-    if n == 12:
+    if n == 12 and groups in ([12], [4, 4, 4]) and not (d.startswith("91") and d[2] in "6789" and groups != [4, 4, 4]):
         return "AADHAAR"
-    if n == 10 and d[0] in "6789":
+    core = d[2:] if n == 12 and d.startswith("91") else d[1:] if n == 11 and d[0] == "0" else d
+    if len(core) == 10 and core[0] in "6789" and all(g >= 2 for g in groups) and max(groups) <= 10:
         return "PHONE"
-    if n == 11 and d[0] == "0":
+    if n == 10 and d[0] == "0" and max(groups) <= 6:
         return "PHONE"
-    if n == 10 and d[0] == "0":
-        return "PHONE"
-    if n >= 9 and n <= 16 and ("-" in run or " " in run):
-        return "ID"
     return None
 
 
@@ -292,6 +292,7 @@ CLIN_PROTECT = [
     re.compile(r"\b[A-TV-Z]\d{2}(?:\.\d{1,2})?\b"),        # ICD-10
     re.compile(r"(?i)\b(?:Ward|वार्ड)\s*\d+\s*\([^)]{2,30}\)"),
     re.compile(r"(?i)\bBed\s*(?:No\.?)?\s*\d+\b"),
+    re.compile(r"\bASHA\b|(?i:\basha\s+(?:workers?|sahayika|facilitator))"),
 ]
 RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|डॉ\.?|डा\.)\s*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:\s+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
 
@@ -306,7 +307,7 @@ STOP_WORDS = {"age", "sex", "uhid", "ipd", "opd", "mobile", "address", "dob", "d
 COMMON_WORDS = {"fever", "pain", "patient", "hospital", "medicine", "ward", "bed", "doctor", "discharge", "summary",
                 "admission", "history", "diagnosis", "treatment", "advice", "review", "tab", "inj", "cap", "syp",
                 "normal", "stable", "date", "time", "report", "lab", "test", "result", "blood", "urine", "sugar",
-                "india", "uttar", "pradesh", "lucknow", "nagar", "road", "street", "district", "tehsil", "the",
+                "india", "uttar", "pradesh", "worker", "workers", "lucknow", "nagar", "road", "street", "district", "tehsil", "the",
                 "and", "with", "from", "new", "old", "general", "medical", "surgery", "care", "center", "centre",
                 "clinic", "health", "city", "public", "primary", "school", "mandir", "masjid", "near"}
 
@@ -347,7 +348,8 @@ class Harvest:
             self.full_names.add(norm(" ".join(toks)))
         for t in toks:
             tl = t.lower()
-            if tl in L.GENERIC_NAME_TOKENS or tl in COMMON_WORDS or len(tl) < 3 and not re.search(rf"[{DEVA}]", t):
+            if (tl in L.GENERIC_NAME_TOKENS or tl in COMMON_WORDS or tl in L.MED_ACRONYMS
+                    or len(tl) < 3 and not re.search(rf"[{DEVA}]", t)):
                 continue
             self.name_tokens.add(tl)
             s = L.skel(t)
@@ -364,11 +366,13 @@ class Harvest:
         d = re.sub(r"\D", "", v)
         if len(d) >= 5:
             self.id_digits.add(d)
+        for g in re.findall(r"\d{5,}", v):
+            self.id_digits.add(g)
 
     def add_place(self, value: str):
         if isinstance(value, str) and value.strip() and not value.strip().isdigit():
             n = norm(value.strip(" ,."))
-            if len(n) >= 3:
+            if len(n) >= 4 and n not in COMMON_WORDS and n not in STOP_WORDS and re.search(rf"[A-Z{DEVA}]", value):
                 self.places.add(n)
 
 

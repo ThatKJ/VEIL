@@ -78,6 +78,7 @@ RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|जिल�
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
 RX_HOUSE = re.compile(rf"(?i)(?:\b(?:H\.?\s?No\.?|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
 RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
+RX_WARD_ADDR = re.compile(r"(?i)(?<=,\s)Ward\s*(?:No\.?)?\s*\d+\b(?!\s*[(/])|\bWard\s*(?:No\.?)?\s*\d+(?=\s*,)")
 RX_WARDNUM = re.compile(r"(?i)\bWard\s*(?:No\.?)?\s*\d+(?!\s*\()")
 RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने)")
 RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
@@ -95,9 +96,19 @@ def _name_ok(toks: list[str]) -> bool:
         return False
     for t in toks:
         tl = t.strip(".").lower()
-        if tl in COMMON_WORDS or tl in L.CLINICAL_WORDS:
+        if tl in COMMON_WORDS or tl in L.CLINICAL_WORDS or tl in L.MED_ACRONYMS or re.search(r"\d", t):
             return False
+    if len(toks) == 1 and toks[0].isupper() and len(toks[0]) <= 3:
+        return False
     return True
+
+
+_SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
+RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
+RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
+                         rf"handed\s+over\s+to|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
+RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
+                          rf"mother|brother|sister|guardian|neighbour|friend)\b", re.I)
 
 
 def generalize_address(value: str, band_pin: bool = True) -> str:
@@ -230,6 +241,27 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(1) + " " + put(ctx.patient_token)
     t = RX_HON_BEFORE.sub(hon_before, t)
 
+    def ctxname(m):
+        g = m.lastindex
+        toks = clean_name_seq(m.group(g))
+        if not _name_ok(toks) or not toks[0][:1].isupper() and not re.search(rf"[{DEVA}]", toks[0]):
+            return m.group(0)
+        seq = m.group(g)
+        joined = " ".join(toks)
+        rest = seq[len(joined):] if seq.startswith(joined) else ""
+        st["identifiers"] += 1
+        return m.group(0)[: m.start(g) - m.start(0)] + put("[NAME]") + rest + m.group(0)[m.end(g) - m.start(0):]
+    t = RX_CTX_NAME.sub(ctxname, t)
+    t = RX_NAME_ROLE.sub(lambda m: (put("[NAME]") + m.group(0)[m.end(1) - m.start(0):]) if _name_ok(clean_name_seq(m.group(1))) and clean_name_seq(m.group(1)) == m.group(1).split() else m.group(0), t)
+
+    def surname(m):
+        first = m.group(1).split()
+        if any(w.lower() in COMMON_WORDS or w.lower() in L.CLINICAL_WORDS or w.lower() in L.MED_ACRONYMS for w in first):
+            return m.group(0)
+        st["identifiers"] += 1
+        return put("[NAME]")
+    t = RX_SURNAME.sub(surname, t)
+
     # 6. harvested names anywhere (full names first, then single tokens)
     for rx in (sw.rx_lat_full, sw.rx_dev_full):
         t = rx.sub(red("[NAME]"), t)
@@ -253,7 +285,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         g = 1 if m.group(1) else 3
         return m.group(0)[: m.start(g) - m.start(0)] + put(m.group(g) + "XXX")
     t = RX_PIN_CTX.sub(pin, t)
-    t = RX_WARDNUM.sub(red("[LOCALITY]"), t)
+    t = RX_WARD_ADDR.sub(red("[LOCALITY]"), t)
 
     # 8. labelled ages -> truthful bands
     def age(m):
