@@ -280,14 +280,14 @@ RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+fro
                          rf"|\b[A-Za-z0-9'\-]{{2,}}(?:\s+[A-Za-z0-9'\-]{{2,}}){{0,3}}\s+(?:pase|pashe|de\s+kol)\b"
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने|दे\s+कोल|पासे|पाशे)"
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
-RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
+RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])[ \t]*[:\-.]?[ \t]*([A-Z][\w]*(?:[ \t]+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)[ \t]*[:\-]?[ \t]*([{DEVA}]+(?:[ \t]+[{DEVA}]+){{0,2}})")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
 RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
                     rf"|(?<![\w.x×])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
 RX_URL = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+|\burn:(?:uuid|oid):[\w.\-]+")
 RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|y|वर्ष|साल|saal|sal)\b\.?(?:\s*old)?)(?=\s*[,/|;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|पुरुष|महिला|$|,|\||/|\)|;))")
 RX_PRE_KIN = re.compile(rf"(?i)(?:^|(?<=[\n,;|(\[]))\s*({NAME_SEQ}),\s*(?=(?:S/O|D/O|W/O|H/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of)\b)")
-RX_PRE_PAREN_KIN = re.compile(rf"(?<![A-Za-z/])({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\(\s*(?i:S/O|D/O|W/O|H/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of|पुत्र|पुत्री|पत्नी|पति|बेटा|बेटी)\.?\s*[:\-]?\s*({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\)")
+RX_PRE_PAREN_KIN = re.compile(rf"(?<![A-Za-z/])({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\(\s*(?i:S/O|D/O|W/O|H/O|C/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of|पुत्र|पुत्री|पत्नी|पति|बेटा|बेटी)\.?\s*[:\-]?\s*({NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}})\s*\)")
 RX_KIN_POSS = re.compile(rf"(?i)\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|श्रीमती)\s+({NAME_SEQ})'s\s+(?:wife|husband|son|daughter|father|mother)\b")
 RX_KIN = re.compile(rf"(?i)\b({L.KIN})\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
@@ -606,7 +606,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         if (not toks or not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))
                 or (len(toks) == 1 and len(toks[0]) <= 2 and toks[0].isascii())
                 or toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness")
-                or not rtoks or not _name_ok(rtoks) or not (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+                or not rtoks or not _name_ok(rtoks) or L.COMPLAINT_WORDS.match(rtoks[0])
+                or not (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
             return m.group(0)
         seq = m.group(1)
         joined = " ".join(toks)

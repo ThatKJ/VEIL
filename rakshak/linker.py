@@ -53,8 +53,13 @@ def name_keys(tokens: list[str]) -> tuple[str, ...]:
     return tuple(ks)
 
 
+def _vill_key(v: str) -> str:
+    toks = [L.skel(w) for w in re.split(r"[\s,._\-]+", v.strip()) if w]
+    return " ".join(t for t in toks if t) or v.strip().casefold()
+
+
 class Cluster:
-    __slots__ = ("members", "names", "given", "rels", "dobs", "genders", "ages", "villages", "ids")
+    __slots__ = ("members", "names", "given", "rels", "dobs", "dob_yrs", "genders", "ages", "byears", "villages", "ids")
 
     def __init__(self, idx: int, ev: dict):
         self.members = [idx]
@@ -62,9 +67,13 @@ class Cluster:
         self.given = {k[0] for k in self.names}
         self.rels = {k for k in (name_keys(n) for n in ev["rel"]) if k}
         self.dobs = {ev["dob"]} if ev["dob"] else set()
+        self.dob_yrs = {int(ev["dob"][:4])} if (ev["dob"] and len(ev["dob"]) >= 4 and ev["dob"][:4].isdigit()) else set()
         self.genders = {ev["gender"]} if ev["gender"] else set()
         self.ages = {ev["age"]} if ev["age"] is not None else set()
-        self.villages = {ev["village"]} if ev["village"] else set()
+        self.byears: set[int] = set()
+        if ev["age"] is not None and isinstance(ev.get("date"), int) and ev["date"] >= 2020:
+            self.byears.add(ev["date"] - ev["age"])
+        self.villages = {_vill_key(ev["village"])} if ev.get("village") else set()
         self.ids = set(ev["ids"]) | {"P:" + p for p in ev["phones"]}
 
     def absorb(self, o: "Cluster"):
@@ -73,8 +82,10 @@ class Cluster:
         self.given |= o.given
         self.rels |= o.rels
         self.dobs |= o.dobs
+        self.dob_yrs |= o.dob_yrs
         self.genders |= o.genders
         self.ages |= o.ages
+        self.byears |= o.byears
         self.villages |= o.villages
         self.ids |= o.ids
 
@@ -125,12 +136,26 @@ def _rel_match(ra: set[tuple[str, ...]], rb: set[tuple[str, ...]]) -> int:
     return 0
 
 
+def _ages_ok(a: Cluster, b: Cluster) -> bool:
+    if not (a.ages and b.ages):
+        return True
+    adiff = min(abs(x - y) for x in a.ages for y in b.ages)
+    if adiff <= 2:
+        return True
+    if adiff <= 5:
+        if a.dob_yrs and b.byears and min(abs(x - y) for x in a.dob_yrs for y in b.byears) <= 1:
+            return True
+        if b.dob_yrs and a.byears and min(abs(x - y) for x in b.dob_yrs for y in a.byears) <= 1:
+            return True
+    return False
+
+
 def compatible(a: Cluster, b: Cluster) -> bool:
     if len(a.genders | b.genders) > 1:
         return False
     if a.dobs and b.dobs and not (a.dobs & b.dobs):
         return False
-    if a.ages and b.ages and min(abs(x - y) for x in a.ages for y in b.ages) > 2:
+    if not _ages_ok(a, b):
         return False
     if not _name_compatible(a, b):
         return False
@@ -187,10 +212,23 @@ class Linker:
                 by_ph[p].append(i)
         for p in sorted(by_ph):
             idx = by_ph[p]
-            for j in idx[1:]:
-                a, b = self.cl[self.find(idx[0])], self.cl[self.find(j)]
-                if a.names and b.names:
-                    self.union(idx[0], j)
+            if len(idx) > 250:
+                continue
+            reps: list[int] = []
+            for j in idx:
+                b = self.cl[self.find(j)]
+                if not b.names:
+                    continue
+                merged = False
+                for r in reps:
+                    a = self.cl[self.find(r)]
+                    if a.names and self.union(r, j):
+                        merged = True
+                        break
+                if not merged and len(reps) < 32:
+                    rj = self.find(j)
+                    if rj not in reps:
+                        reps.append(rj)
         # ---- rule 2: Fellegi-Sunter-inspired evidence scoring with term-frequency weights,
         # only accepting when a candidate clears threshold AND leads the runner-up by a clear margin.
         for _ in range(2):
@@ -227,14 +265,18 @@ class Linker:
                     continue
                 sec_cands = set()
                 for dob in c.dobs:
-                    sec_cands |= sec_idx[("D", dob)]
+                    bkt = sec_idx[("D", dob)]
+                    if len(bkt) <= 250:
+                        sec_cands |= bkt
                 for v in c.villages:
-                    vb = sec_idx[("V", v)]
-                    if len(vb) <= 500 or c.dobs or c.rels:
-                        sec_cands |= vb
+                    bkt = sec_idx[("V", v)]
+                    if len(bkt) <= 250:
+                        sec_cands |= bkt
                 for rt in c.rels:
                     if rt:
-                        sec_cands |= sec_idx[("R", rt[0])]
+                        bkt = sec_idx[("R", rt[0])]
+                        if len(bkt) <= 250:
+                            sec_cands |= bkt
                 if len(sec_cands) <= 1 and (not sec_cands or r in sec_cands):
                     continue
                 if len(sec_cands) > 64:
@@ -244,7 +286,7 @@ class Linker:
                     cand_roots = sec_cands & name_cands
                 else:
                     cand_roots = sec_cands
-                if len(cand_roots) > 256 and not (c.dobs or c.rels):
+                if len(cand_roots) > 250:
                     continue
                 scored = []
                 seen_o = {r}
@@ -262,8 +304,7 @@ class Linker:
                         continue
                     rel_m = _rel_match(c.rels, d.rels)
                     dob_m = bool(c.dobs & d.dobs)
-                    vill_m = (bool(c.villages & d.villages) and c.ages and d.ages
-                              and min(abs(x - y) for x in c.ages for y in d.ages) <= 2)
+                    vill_m = (bool(c.villages & d.villages) and c.ages and d.ages and _ages_ok(c, d))
                     if not (dob_m or rel_m or vill_m):
                         continue
                     if not compatible(c, d):

@@ -41,7 +41,7 @@ class Rule:
 
 
 def consistent_band(ages: list[int], width: int) -> tuple[int, int] | None:
-    """One truthful band per patient covering every observed age (no intersection leak across records)."""
+    """One minimal truthful band per patient covering every observed age (ARX lattice)."""
     if not ages or width <= 1:
         return None
     lo_a, hi_a = min(ages), max(ages)
@@ -50,6 +50,10 @@ def consistent_band(ages: list[int], width: int) -> tuple[int, int] | None:
         lo = (lo_a // w) * w
         if hi_a <= lo + w - 1:
             return lo, lo + w - 1
+        if w >= 10 and (hi_a - lo_a) < w:
+            lo5 = (lo_a // 5) * 5
+            if hi_a <= lo5 + w - 1:
+                return lo5, lo5 + w - 1
         w *= 2
     return (lo_a // 10) * 10, ((hi_a // 10) * 10) + 9
 

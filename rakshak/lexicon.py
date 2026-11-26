@@ -152,7 +152,7 @@ FIELD_RULES = [
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
              r"distt|jila|jillo|जिला|ज़िला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
              r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*"),
-    ("NAME", r"name|naam|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|patient|pt|beneficiary|insured|rogi|dardi|daradi|client|"
+    ("NAME", r"name|naam|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
              r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
     ("AGE", r"age|umar|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
@@ -190,8 +190,8 @@ def classify_key(key: str) -> str | None:
 # Labels that introduce a patient name inside free text
 NAME_LABEL = re.compile(
     rf"(?i)(?:^|(?<=[\s,;|(\[]))(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|"
-    rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|name|nm\.?|"
-    rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী)\s*[:：=\-]+\s*")
+    rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|labharthi|name|nm\.?|"
+    rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|लाभार्थी|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী)\s*[:：=\-]+\s*")
 ADDRESS_LABEL = re.compile(
     r"(?i)(?:^|(?<=[\s,;|(\[]))(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|"
     r"patta|sarnamu|rihaish|thikana|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना)\s*[:：\-]+\s*")

@@ -22,7 +22,7 @@ from .linker import Linker
 from .scrub import NAME_VALUE, Masker
 from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_NAME_ROLE,
                     RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _name_ok, generalize_address, scrub_text)
-from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ
+from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ, STOP_WORDS
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
                ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".hl7", ".rtf", ".odt", ".ppt", ".pptx",
@@ -198,6 +198,11 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     elif kind == "DOB":
         d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
         e["dob"] = d.isoformat() if d else s
+    elif kind == "DATE":
+        if not e["date"]:
+            d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
+            if d and 1990 <= d.year <= 2035:
+                e["date"] = d.year
     elif kind == "AGE":
         a = age_of(s)
         if a is not None:
@@ -219,7 +224,10 @@ COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "p
             "disease", "illness", "surgery", "operation", "rog", "बीमारी", "निदान"}
 
 
-_PAT_HON_RX = re.compile(rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|garu|anna|akka|banna|hukum|bhaisa|apa|जी|साहब|दीदी|भाई|बहन))\b")
+_PAT_HON_RX = re.compile(
+    rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|garu|anna|akka|banna|hukum|bhaisa|apa|जी|साहब|दीदी|भाई|बहन))\b"
+    rf"|({NAME_SEQ})(\s+(?:di|da|chacha))(?=\s+(?:ka|ki|ke|ko|se|ne|par|me)\b|:)"
+)
 
 
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
@@ -234,7 +242,8 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
             if first_label is None:
                 first_label = toks
     for m in _PAT_HON_RX.finditer(text):
-        toks = clean_name_seq(m.group(1))
+        seq = m.group(1) or m.group(3)
+        toks = clean_name_seq(seq)
         if _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
             H.add_name(" ".join(toks))
             if first_label is None:
@@ -255,7 +264,8 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
                     if toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness"):
                         continue
                     rtoks = clean_name_seq(m.group(2))
-                    if not (rtoks and _name_ok(rtoks) and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+                    if not (rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
+                            and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
                         continue
                 H.add_name(" ".join(toks))
                 first_label = toks
@@ -269,7 +279,8 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         rtoks = clean_name_seq(m.group(2))
         if (toks and _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))
                 and toks[-1].lower() not in ("attendant", "relative", "visitor", "guardian", "witness")
-                and rtoks and _name_ok(rtoks) and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+                and rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
+                and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
             H.add_name(" ".join(rtoks))
             e["rel"].append(rtoks)
     if first_label:
@@ -345,8 +356,15 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     for m in RX_VILL.finditer(text):
         v = m.group(1) or m.group(2)
         if v:
-            H.add_place(v)
-            e["village"] = e["village"] or norm(v)
+            v = " ".join(t for t in v.split() if t.lower() not in STOP_WORDS)
+            if v:
+                H.add_place(v)
+                e["village"] = e["village"] or norm(v)
+    if e["date"] is None:
+        dm = re.search(r"(?:तारीख|तिथि|Date|DOA|DOD|Admitted|Discharged)\s*[:\-]?\s*([^\n]{4,24})", text, re.I)
+        d = parse_date(dm.group(1), order) if dm else None
+        if d and 2015 <= d.year <= 2035:
+            e["date"] = d.year
 
 
 def guard_ids(recs: list) -> None:
@@ -617,7 +635,13 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
         for x in obj:
             walk_evidence(x, kind, rec, H, order, res_kind)
     elif isinstance(obj, (str, int, float)) and not isinstance(obj, bool):
-        if kind in ("DOCTOR", "STRUCT", "RELATION", "DATE"):
+        if kind == "DATE":
+            if isinstance(obj, str) and not rec.ev["date"]:
+                d = parse_date(obj, order)
+                if d and 1990 <= d.year <= 2035:
+                    rec.ev["date"] = d.year
+            return
+        if kind in ("DOCTOR", "STRUCT", "RELATION"):
             return
         if kind in (None, "SAFE"):
             if isinstance(obj, str) and len(obj) > 3:
@@ -755,7 +779,12 @@ def pass1(job: FileJob, H: Harvest):
                             r.ev.setdefault("conds", set()).add(norm(v))
                         if len(v) > 3:
                             text_evidence(v, r, H, job.order)
-                    elif k not in ("DOCTOR", "DATE", "RELATION", "STRUCT"):
+                    elif k == "DATE":
+                        if not r.ev["date"]:
+                            d = parse_date(v, job.order)
+                            if d and 1990 <= d.year <= 2035:
+                                r.ev["date"] = d.year
+                    elif k not in ("DOCTOR", "RELATION", "STRUCT"):
                         add_ev(r, H, k, v, order=job.order)
                         if k == "AGE" and isinstance(v, str):
                             gm = re.search(r"(?i)/\s*([MF])\b", v)
@@ -1331,7 +1360,10 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
             j.status, j.reason = "quarantined", "processing_error"
             continue
-        dest = san / j.out_rel
+        dest = (san / j.out_rel).resolve()
+        if not dest.is_relative_to(san.resolve()):
+            j.status, j.reason = "quarantined", "unsafe_path"
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "w", encoding="utf-8", newline="") as f:
             f.write(result)

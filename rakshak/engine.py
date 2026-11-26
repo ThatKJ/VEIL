@@ -403,7 +403,8 @@ COMMON_WORDS = {"fever", "pain", "patient", "hospital", "medicine", "ward", "bed
                 "normal", "stable", "date", "time", "report", "lab", "test", "result", "blood", "urine", "sugar",
                 "india", "uttar", "pradesh", "worker", "workers", "lucknow", "nagar", "road", "street", "district", "tehsil", "the",
                 "and", "with", "from", "new", "old", "general", "medical", "surgery", "care", "center", "centre",
-                "clinic", "health", "city", "public", "primary", "school", "mandir", "masjid", "near"}
+                "clinic", "health", "city", "public", "primary", "school", "mandir", "masjid", "near",
+                "dawa", "dawai", "goli", "sui", "teeka", "pani", "khana", "chai"}
 
 
 _HON_LEAD = re.compile(rf"^(?:{L.HONORIFIC_BEFORE})$", re.I)

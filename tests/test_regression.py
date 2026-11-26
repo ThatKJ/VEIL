@@ -354,6 +354,60 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(len(pids), 2)
             self.assertEqual(len(set(pids)), 1)
 
+    def test_phase9_family_phone_cross_script_village_byear_and_labharthi(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            # Multi-member family phone: wife (Devanagari village, 2024 vs 2026 aging) & husband (same phone, different name)
+            (inp / "reg.csv").write_text(
+                "UHID,Patient Name,Gender,Age,DOB,Village,Mobile\n"
+                "SNJ/26/001,Sukhwinder Kaur,F,41,22/01/1982,Durgamau Kalan,9876543210\n"
+                "SNJ/26/002,Kuldeep Singh,M,46,10/03/1979,Durgamau Kalan,9876543210\n",
+                encoding="utf-8",
+            )
+            (inp / "rx_wife.txt").write_text(
+                "नाम: सुखविंदर कौर   आयु: 44 वर्ष\nग्राम: दुर्गामऊ कलां\nतारीख: 16/05/2026\nDiagnosis: Fever\n",
+                encoding="utf-8",
+            )
+            (inp / "note_co.txt").write_text(
+                "[16-Oct-25] opd: Meekan (C/o Chacheraj) - Iron deficiency anaemia followup.\n"
+                "Number 89063-18163.\n",
+                encoding="utf-8",
+            )
+            (inp / "batch.tsv").write_text(json.dumps([
+                {"labharthi": "Meekan Kurian", "guardian": "Chacheraj Kurian", "mobile": "8906318163"}
+            ]), encoding="utf-8")
+            (inp / "whatsapp.txt").write_text(
+                "14-Nov-24 9:27 pm - Nurse: Meekan di ka result normal, 89063-18163 pe batana\n"
+                "Patient ko Dawa di.\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-phase9-check")
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            by_file = {}
+            for r in recs:
+                by_file.setdefault(r["file"], []).append(r["patient"])
+            # Wife linked across script, village transliteration, and 41->44 aging; husband stays distinct on same phone
+            wife_reg = by_file["sanitized/reg.csv"][0]
+            husb_reg = by_file["sanitized/reg.csv"][1]
+            self.assertNotEqual(wife_reg, husb_reg)
+            self.assertEqual(by_file["sanitized/rx_wife.txt"][0], wife_reg)
+            # Note with (C/o Rel), WhatsApp "di ka", and "labharthi" JSON behind .tsv all link to one cluster
+            meekan_pids = [
+                by_file["sanitized/note_co.txt"][0],
+                by_file["sanitized/batch.tsv"][0],
+                by_file["sanitized/whatsapp.txt"][0],
+            ]
+            self.assertEqual(len(set(meekan_pids)), 1)
+            self.assertTrue(meekan_pids[0])
+            # "labharthi" field replaced by PSN (not [NAME]), ensuring pseudonym_consistency
+            batch_out = (out / "sanitized" / "batch.tsv").read_text(encoding="utf-8")
+            self.assertIn(meekan_pids[0], batch_out)
+            # "Dawa di." never falsely treated as patient name
+            wa_out = (out / "sanitized" / "whatsapp.txt").read_text(encoding="utf-8")
+            self.assertIn("Dawa di", wa_out)
+
 
 if __name__ == "__main__":
     unittest.main()
