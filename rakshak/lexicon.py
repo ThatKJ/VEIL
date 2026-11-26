@@ -133,11 +133,12 @@ def skel(token: str) -> str:
 
 
 # ---------------------------------------------------------------- name structure
-HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|dadi|aaji|babu|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|garu|anna|akka|banna|hukum|bhaisa|apa|मैडम|जी|साहब|दीदी|भाई|बहन)"
+HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|garu|anna|akka|banna|hukum|bhaisa|apa|avaru|जी|साहब|दीदी|भाई|बहन)"
+KIN_HONORIFIC_AFTER = r"(?:bhaiya|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|dadi)"
 HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्रीमान|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?|सौ\.?|कै\.?|बीबी|रोगी|मरीज़|मरीज|রোগী)"
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
                        "prasad", "singh", "kaur", "shri", "shriman", "sri", "smt", "mr", "mrs", "ms", "miss",
-                       "master", "km", "sr", "kr", "sahab", "saheb", "didi", "bhai", "ben",
+                       "master", "km", "sr", "kr", "sahab", "saheb", "didi", "bhai", "ben", "avaru", "avara",
                        "kaka", "paaji", "bhau", "tai", "dada", "aaji", "babu", "chacha", "chachaji", "babuji",
                        "bhaiya", "amma", "garu", "anna", "akka", "sir", "banna", "hukum", "bhaisa", "da", "di", "apa",
                        "khura", "khuri", "putek", "ghoini", "jiek", "jiyek", "baideu", "baaideo", "bhonti",
@@ -163,7 +164,7 @@ FIELD_RULES = [
     ("ABHA", r"abha\w*|आभा|healthid"),
     ("PAN", r"pan|panno|pannumber"),
     ("EMAIL", r"e?mail|email\w*|ईमेल"),
-    ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|phon|telecom|भ्रमणध्वनी"),
+    ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|fone|phon|telecom|भ्रमणध्वनी"),
     ("FAMILY_ID", r"ration\w*|bpl\w*|familyid|kasp\w*|chirayu\w*|ppp\w*"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
     ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opipno|opip|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|bhartino|bhartinum|bhartiid|crn|crno|"
@@ -185,12 +186,12 @@ FIELD_RULES = [
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
              r"distt|jila|jillo|जिला|ज़िला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
              r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*|khana|keemat|analyte|parameter"),
-    ("NAME", r"name|naam|hesaru|peru|rugir|rugi|rogir|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
-             r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
-             r"surname|fullname|firstname|lastname|middle|local|alias"),
+    ("NAME", r"name|naam|hesaru|peru|rugir|rugi|rogir|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|mareez|bimaar|bimar|client|"
+             r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|firstname|lastname|givenname|familyname|"
+             r"surname|fullname|middle|local|alias"),
     ("AGE", r"age|umar|umr|umra|umir|vayassu|vayasu|prayam|boyos|boyosh|bayas|bayos|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
     ("VILLAGE", r"village|gaon|gaanv|gam|gram|graan|garan|ooru|desam|desham|taluk|thaluk|panchayat\w*|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
-    ("ADDRESS", r"address\w*|addr|street|house|hno|houseno|door|doorno|melvilasam|vilasam|vilaasa|vilasa|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna"),
+    ("ADDRESS", r"address\w*|addr|street|house|hno|houseno|door|doorno|melvilasam|vilasam|vilaasa|vilasa|line[123]|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna"),
     ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|bharti|chhutti|raja|din|aail|admission|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
@@ -210,6 +211,8 @@ _DATE_TOK = re.compile(r"date|dated|dinanka|tithi|तारीख|तिथि|d
 @lru_cache(maxsize=16384)
 def classify_key(key: str) -> str | None:
     toks = key_tokens(key)
+    if toks in (("first",), ("last",), ("given",), ("family",)):
+        return "NAME"
     joined = "".join(toks)
     if _DOB_RX.fullmatch(joined) or any(_DOB_RX.fullmatch(t) for t in toks):
         return "DOB"
@@ -228,7 +231,7 @@ def classify_key(key: str) -> str | None:
 # Labels that introduce a patient name inside free text
 NAME_LABEL = re.compile(
     rf"(?i)(?:^|(?<=[\s,;|(\[]))(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|"
-    rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|labharthi|name|nm\.?|"
+    rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|bimaar|bimar|beneficiary|labharthi|name|nm\.?|"
     rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|लाभार्थी|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী|രോഗി|പേര്)\s*[:：=\-]+\s*")
 ADDRESS_LABEL = re.compile(
     r"(?i)(?:^|(?<=[\s,;|(\[]))(?:(?:address|addr\.?|residence|thamasa\s*sthalam|"

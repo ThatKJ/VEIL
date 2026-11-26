@@ -177,7 +177,7 @@ def _plan(groups, policy) -> Plan:
         elif k5_dist and cells5nd[cell(p, base_band, False, with_dist=False)] >= k_min:
             rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", dist=rare_dist, reason="k_dist")
         elif cells10[cell(p, 10, False)] >= k_min:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist=(rare_dist if k5_dist else "keep"), reason="k_band")
+            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_band")
         elif cells10[cell(p, 10, False)] >= 2:
             rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist=(rare_dist if k5_dist else "keep"), reason="k_all")
         else:

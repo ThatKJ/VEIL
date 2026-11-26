@@ -382,6 +382,7 @@ RX_KIN_POSS = re.compile(rf"(?i)(?:\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|�
 RX_KIN = re.compile(rf"(?i)\b({L.KIN})(?![A-Za-z{DEVA}])\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
 RX_HON_AFTER = re.compile(rf"({NAME_SEQ})(\s+(?i:{L.HONORIFIC_AFTER}))\b")
+RX_KIN_HON_AFTER = re.compile(rf"({NAME_SEQ})(\s+(?i:{L.KIN_HONORIFIC_AFTER}))\b")
 RX_HON_BEFORE = re.compile(rf"\b({L.HONORIFIC_BEFORE})\s+({NAME_SEQ})")
 RX_ATTACH_FILE = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9_\-.]{3,80}\.(?:pdf|docx?|xlsx?|pptx?|jpe?g|png|tiff?|bmp|txt|csv|tsv|json|xml|rtf|dcm))\b", re.I)
 
@@ -417,7 +418,7 @@ NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\
 RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.?\s*(?:No|Number|#)|IP\s*No|IPD\s*No|OPD\s*No|"
                          r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Bharti\s*(?:No\.?|Number|#)|भर्ती\s*(?:सं\.?|नं\.?)|Record\s*No|File\s*No|"
                          r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?)|UID|Aadhaar|Aadhar|ABHA|"
-                         r"Ration(?:\s*Card)?|KASP|Chirayu|PPP\s*(?:ID|No))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
+                         r"Ration(?:\s*Card)?|KASP|Chirayu|PPP\s*(?:ID|No))\s*[:#.\-=]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
 _RX_PT_PROSE = re.compile(r"\bPatient\s+([A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20}){1,2})\b")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
                           rf"mother|brother|sister|guardian|neighbour|friend|raahgir|rahgir|padosi|padosan|rishtedaar|rishtedar|mitra|dost|saathi|"
@@ -792,9 +793,21 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return head + put("[RELATIVE]") + rest
     t = RX_KIN.sub(kin, t)
 
+    def kin_hon_after(m):
+        toks = clean_name_seq(m.group(1))
+        if not toks:
+            return m.group(0)
+        if not (_name_ok(toks) or (toks[0][:1].isupper() and not any(w.strip(".").lower() in (L.CLINICAL_WORDS | L.MED_ACRONYMS | STOPW) for w in toks))):
+            return m.group(0)
+        st["identifiers"] += 1
+        return put("[RELATIVE]")
+    t = RX_KIN_HON_AFTER.sub(kin_hon_after, t)
+
     def hon_after(m):
         toks = clean_name_seq(m.group(1))
-        if not _name_ok(toks):
+        if not toks:
+            return m.group(0)
+        if not (_name_ok(toks) or (toks[0][:1].isupper() and not any(w.strip(".").lower() in (L.CLINICAL_WORDS | L.MED_ACRONYMS | STOPW) for w in toks))):
             return m.group(0)
         st["identifiers"] += 1
         return put(ctx.patient_token) + m.group(2)

@@ -435,6 +435,8 @@ def classify_digits(run: str) -> str | None:
         return "PHONE"
     if n == 10 and d[0] == "0" and max(groups) <= 6:
         return "PHONE"
+    if n == 11 and d[0] == "0" and len(groups) >= 2 and 2 <= groups[0] <= 5 and max(groups) <= 8:
+        return "PHONE"
     return None
 
 

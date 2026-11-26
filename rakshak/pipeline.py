@@ -25,8 +25,9 @@ from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_DOCTOR, RX_DOTTED_PHONE, R
                      sniff_kind)
 from .linker import Linker
 from .scrub import NAME_VALUE, Masker
-from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_NAME_ROLE,
-                    RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _name_ok, generalize_address, scrub_text)
+from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_HON_AFTER, RX_KIN_POSS, RX_LABEL,
+                    RX_NAME_ROLE, RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _name_ok, generalize_address,
+                    scrub_text)
 from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ, STOP_WORDS
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
@@ -343,7 +344,8 @@ def _kv_kind(label: str, value: str):
     return k if k in KV_KINDS else None
 
 
-_NEXT_LABEL = re.compile(r"(?:\s{2,}|,\s+)(?=[^\s:：][^:：\n]{0,24}[:：=])|\s+[-–]\s+(?=[A-Z])")
+_NEXT_LABEL = re.compile(r"(?:\s{2,}|,\s+|[ \t]*[|│][ \t]*)(?=[^\s:：|│][^:：\n|│]{0,24}[:：=])|\s+[-–]\s+(?=[A-Z])")
+_PIPE_KV_ITEM = re.compile(r"[|│][ \t]*([A-Za-z\u0900-\u097F][^:=\n|│(),;\[\]]{0,30}?)[ \t]*[:：=][ \t]*([^\n|│]+?)(?=[ \t]*(?:[|│]|$))")
 
 
 def kv_rows(text):
@@ -356,11 +358,16 @@ def kv_rows(text):
             lab = m.group(7)
             if len(lab.split()) > 3:
                 continue
-            v = m.group(9)
-            cut = _NEXT_LABEL.search(v)
-            if cut:
-                v = v[:cut.start()]
-            yield lab, v, m.start(9), m.start(9) + len(v)
+            raw_v = m.group(9)
+            vstart = m.start(9)
+            cut = _NEXT_LABEL.search(raw_v)
+            v = raw_v[:cut.start()] if cut else raw_v
+            yield lab, v, vstart, vstart + len(v)
+            if cut and ("|" in raw_v or "│" in raw_v):
+                for pm in _PIPE_KV_ITEM.finditer(raw_v, cut.start()):
+                    plab = pm.group(1).strip(" *")
+                    if len(plab.split()) <= 3:
+                        yield plab, pm.group(2), vstart + pm.start(2), vstart + pm.end(2)
 
 
 RX_ICD = re.compile(r"\b([A-TV-Z]\d{2}(?:\.\d{1,2})?)\b")
@@ -369,9 +376,10 @@ COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "p
 
 
 _PAT_HON_RX = re.compile(
-    rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|garu|anna|akka|banna|hukum|bhaisa|apa|जी|साहब|दीदी|भाई|बहन))\b"
+    rf"({NAME_SEQ})(\s+(?i:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|garu|anna|akka|banna|hukum|bhaisa|apa|जी|साहब|दीदी|भाई|बहन))\b"
     rf"|({NAME_SEQ})(\s+(?:di|da|chacha))(?=\s+(?:ka|ki|ke|ko|se|ne|par|me)\b|:)"
 )
+_PAT_KIN_HON_RX = re.compile(rf"({NAME_SEQ})(\s+(?i:{L.KIN_HONORIFIC_AFTER}))\b")
 
 
 _RX_SQL_INS = re.compile(r"(?i)\bINSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES\s*\(([^;]+)\)")
@@ -439,10 +447,19 @@ def _scan_plain_text_evidence(text: str, order: str):
     for m in _PAT_HON_RX.finditer(text):
         seq = m.group(1) or m.group(3)
         toks = clean_name_seq(seq)
-        if _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
+        ok_tok = bool(toks) and (
+            _name_ok(toks)
+            or (toks[0][:1].isupper() and not any(w.strip(".").lower() in (L.CLINICAL_WORDS | L.MED_ACRONYMS) for w in toks))
+        )
+        if ok_tok and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
             h_names.append(" ".join(toks))
             if first_label is None:
                 first_label = toks
+    for m in _PAT_KIN_HON_RX.finditer(text):
+        toks = clean_name_seq(m.group(1))
+        if toks and _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
+            h_names.append(" ".join(toks))
+            rels.append(toks)
     for m in RX_HON_BEFORE.finditer(text):
         toks = clean_name_seq(m.group(2))
         if _name_ok(toks):
@@ -1039,14 +1056,17 @@ def _table_header(rows):
             return 0
         for i in range(1, min(len(rows) - 1, 64)):
             width = len(rows[i])
-            if width >= 2 and len(rows[i + 1]) == width and all(h.strip() for h in rows[i]) and _hdr_known(rows[i]) >= 2 and _hdr_known(rows[i]) > k0:
+            if (width >= 2 and len(rows[i + 1]) == width and all(h.strip() for h in rows[i])
+                    and _hdr_known(rows[i]) >= 2 and _hdr_known(rows[i]) > k0
+                    and not any(_RX_DIG3.search(c) for c in rows[i])
+                    and _banner_kinds(rows[i], [], "dmy") is None):
                 return i
         return 0
     first_rect = None
     for i in range(1, min(len(rows) - 1, 64)):
         width = len(rows[i])
         if width >= 2 and len(rows[i + 1]) == width and all(h.strip() for h in rows[i]):
-            if _hdr_known(rows[i]) >= 2:
+            if _hdr_known(rows[i]) >= 2 and not any(_RX_DIG3.search(c) for c in rows[i]) and _banner_kinds(rows[i], [], "dmy") is None:
                 return i
             if first_rect is None:
                 first_rect = i
@@ -1077,7 +1097,7 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
         cmap = {**(col_map or {}), **lmap} if lmap else col_map
         rk = res_kind
         rt = obj.get("resourceType")
-        if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService"):
+        if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService", "MessageHeader"):
             rk = "DOCTOR"
         elif rt == "RelatedPerson":
             rk = "REL_NAME"
@@ -1145,6 +1165,42 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
         if kind == "NAME" and not isinstance(obj, str):
             return
         add_ev(rec, H, kind, obj, order=order)
+
+
+def _banner_kinds(row: list[str], kinds: list, order: str) -> list[str | None] | None:
+    """Detect inline block-banner rows inside lab/procedure tables (e.g. 'MAREEZ, Name, Date, UHID, ID, Age')."""
+    if len(row) < 2 or any(kk in ("NAME", "MRN") for kk in kinds):
+        return None
+    k0 = kind_of_key(row[0].strip()) if row[0].strip() else None
+    if k0 not in ("NAME", "MRN"):
+        return None
+    if row[1].strip() and kind_of_key(row[1].strip()) is not None:
+        return None
+    bk: list[str | None] = [None] * len(row)
+    bk[0] = "SAFE"
+    if row[1].strip():
+        bk[1] = k0
+    ci = 2
+    while ci < len(row):
+        lab = row[ci].strip()
+        if lab and ci + 1 < len(row) and row[ci + 1].strip():
+            kl = kind_of_key(lab)
+            if kl in ("MRN", "PHONE", "AADHAAR", "ABHA", "DOB", "AGE", "NAME"):
+                bk[ci] = "SAFE"
+                bk[ci + 1] = kl
+                ci += 2
+                continue
+        if lab:
+            if len(lab) <= 3 and lab.isdigit() and 0 <= int(lab) <= 120:
+                bk[ci] = "AGE"
+            elif parse_date(lab, order if order in ("dmy", "mdy") else "dmy"):
+                bk[ci] = "DATE"
+        ci += 1
+    return bk
+
+
+def _is_kv_cont(row: list[str]) -> bool:
+    return bool(row) and not row[0].strip() and any(isinstance(v, str) and _INLINE_KV_CELL.match(v) for v in row[1:])
 
 
 def pass1(job: FileJob, H: Harvest):
@@ -1287,21 +1343,52 @@ def pass1(job: FileJob, H: Harvest):
                 for ci in range(len(kinds))
             ]
             name_col_idx = [ci for ci, kk in enumerate(kinds) if kk == "NAME"]
+            prev_rec = None
             for i, row in enumerate(data_iter):
                 r = Rec(job.rel, i)
                 if (super_hdr and i == 0) or row == header or not any(v.strip() for v in row):
                     job.repeat_headers.add(i)
                     job.recs.append(r)
                     continue
-                if len(row) != len(kinds):
+                bk = _banner_kinds(row, kinds, job.order)
+                if bk is not None:
+                    for ci, v in enumerate(row):
+                        k = bk[ci]
+                        if k == "DATE":
+                            if not r.date:
+                                d = parse_date(v, job.order)
+                                if d and 1990 <= d.year <= 2035:
+                                    r.date = d.year
+                        elif k is not None:
+                            add_ev(r, H, k, v, order=job.order)
+                        elif len(v) > 3:
+                            text_evidence(v, r, H, job.order)
+                    job.recs.append(r)
+                    prev_rec = r
+                    continue
+                if _is_kv_cont(row):
+                    for v in row[1:]:
+                        if len(v.strip()) > 3:
+                            text_evidence(v, r, H, job.order)
+                    if prev_rec is not None and prev_rec.is_patient and not r.names and not r.ids:
+                        for pid_tok in prev_rec.ids:
+                            r.add_id(pid_tok)
+                        r.is_patient = True
+                    job.recs.append(r)
+                    continue
+                if len(row) < len(kinds) or (len(row) > len(kinds) and len(kinds) < 6):
                     for v in row:
                         if len(v.strip()) > 3:
                             text_evidence(v, r, H, job.order)
                     job.recs.append(r)
+                    prev_rec = r
                     continue
-                attr_v = row[job.eav[0]] if job.eav else None
+                attr_v = row[job.eav[0]] if (job.eav and job.eav[0] < len(row)) else None
                 for ci, v in enumerate(row):
-                    k = (_eav_cell_kind(attr_v) or kinds[ci]) if (job.eav and ci == job.eav[1] and attr_v is not None) else kinds[ci]
+                    if ci >= len(kinds):
+                        k = None
+                    else:
+                        k = (_eav_cell_kind(attr_v) or kinds[ci]) if (job.eav and ci == job.eav[1] and attr_v is not None) else kinds[ci]
                     if k == "GENDER":
                         g_v = gender_of(v)
                         if g_v:
@@ -1337,6 +1424,7 @@ def pass1(job: FileJob, H: Harvest):
                     if len(names) > 1:
                         r.names = (tuple(" ".join(names).split()),)
                 job.recs.append(r)
+                prev_rec = r
             if stream_mode:
                 job.text = None
                 del peek, row_iter, data_iter
@@ -1401,7 +1489,7 @@ class Rewriter:
         s = v
         if not s.strip():
             return s
-        if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
+        if kind not in ("STRUCT", "RELATION") and _INLINE_KV_CELL.match(s):
             return scrub_text(kv_rewrite(s, self, ctx, rec), ctx, self.sw)
         if kind == "NAME":
             if _RX_DR_STAFF.match(s) or s[:3].lower() == "sn ":
@@ -1442,7 +1530,7 @@ class Rewriter:
         if kind == "DATE":
             return shift_dates_in(s, ctx.days, ctx.order) if ctx.days else s
         if kind == "AGE":
-            m = re.search(r"\d{1,3}", s)
+            m = re.search(r"-?\d{1,3}", s)
             if m:
                 st["generalized"] += 1
                 return s[: m.start()] + ctx.band(int(m.group(0))) + s[m.end():]
@@ -1567,7 +1655,7 @@ class Rewriter:
             cmap = {**(col_map or {}), **lmap} if lmap else col_map
             rk = res_kind
             rt = obj.get("resourceType")
-            if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService"):
+            if rt in ("Practitioner", "PractitionerRole", "Organization", "Location", "Device", "HealthcareService", "MessageHeader"):
                 rk = "DOCTOR"
             elif rt == "RelatedPerson":
                 rk = "REL_NAME"
@@ -2302,7 +2390,18 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                                         r = j.recs[i]
                                         c = ctx_for(r, j)
                                         new_row = []
-                                        ragged = len(row) != len(j.colkinds)
+                                        bk = _banner_kinds(row, j.colkinds, j.order)
+                                        if bk is not None:
+                                            for ci, v in enumerate(row):
+                                                new_row.append(rw.value(v, bk[ci], c, r))
+                                            emit_row(new_row)
+                                            continue
+                                        if _is_kv_cont(row):
+                                            for v in row:
+                                                new_row.append(rw.value(v, None, c, r))
+                                            emit_row(new_row)
+                                            continue
+                                        ragged = len(row) < len(j.colkinds) or (len(row) > len(j.colkinds) and len(j.colkinds) < 6)
                                         attr_v = row[j.eav[0]] if (j.eav and not ragged and j.eav[0] < len(row)) else None
                                         for ci, v in enumerate(row):
                                             k = j.colkinds[ci] if ci < len(j.colkinds) else None
