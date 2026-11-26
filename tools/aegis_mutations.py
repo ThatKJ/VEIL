@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import shutil
 import sys
@@ -146,6 +147,30 @@ def m_malformed(out, name):
     p.write_text(t[: len(t) // 2], encoding="utf-8")
 
 
+def m_dob_unshifted(out, name):
+    """Genuine leak: put a patient's ORIGINAL birth date back into its sanitized DOB cell."""
+    import csv, io
+    inp = Path(os.environ["AEGIS_INPUT"])
+    for o in sorted((out / "sanitized").rglob("*.csv")):
+        rel = o.relative_to(out / "sanitized")
+        src = inp / rel
+        if not src.is_file():
+            continue
+        irows = list(csv.reader(io.StringIO(src.read_text(encoding="utf-8-sig", errors="replace"))))
+        orows = list(csv.reader(io.StringIO(o.read_text(encoding="utf-8"))))
+        if not irows or len(irows) != len(orows):
+            continue
+        for ci, h in enumerate(irows[0]):
+            if re.search(r"(?i)\bdob\b|birth", h):
+                for ri in range(1, len(irows)):
+                    if ci < len(irows[ri]) and irows[ri][ci].strip() and ci < len(orows[ri]):
+                        orows[ri][ci] = irows[ri][ci]
+                        buf = io.StringIO(); csv.writer(buf, lineterminator="\n").writerows(orows)
+                        o.write_text(buf.getvalue(), encoding="utf-8")
+                        return
+    raise RuntimeError("no aligned DOB column")
+
+
 MUTATIONS = [
     ("PAN identifier", m_pan, "privacy"), ("phone number", m_phone, "privacy"), ("patient name", m_name, "privacy"),
     ("base64-encoded phone", m_b64, "privacy"), ("medication dose", m_dose, "clinical"), ("lab value", m_lab, "clinical"),
@@ -154,6 +179,7 @@ MUTATIONS = [
     ("duplicated record", m_duplicate, "identity|structural"), ("broken FHIR reference", m_fhir_ref, "structural"),
     ("unexpected output file", m_extra_file, "structural"), ("inaccurate report count", m_report_count, "structural"),
     ("malformed output", m_malformed, "structural"),
+    ("unshifted birth date", m_dob_unshifted, "privacy"),
 ]
 
 
@@ -165,6 +191,7 @@ def main() -> int:
     ap.add_argument("--name", required=True, help="a synthetic patient name present in the input")
     a = ap.parse_args()
     inp, rel, work = Path(a.input), Path(a.release), Path(a.work)
+    os.environ["AEGIS_INPUT"] = str(inp)
     work.mkdir(parents=True, exist_ok=True)
     clean = VP.audit(inp, rel)
     fails = {k: c["status"] for k, c in clean["checks"].items() if c["status"] != "PASS"}

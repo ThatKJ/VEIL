@@ -78,6 +78,9 @@ _STAFF_TITLE = r"(?:dr|sr|sis|sister|sn|s/n|staff\s+nurse|nurse|anm|gnm|n/o|deo|
 _STAFF_PREFIX = re.compile(rf"(?i)\s*{_STAFF_TITLE}\.?\s")
 # A value that is a clinical expression (dose/unit) is not a personal identifier.
 _CLINICAL_VALUE = re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg|ml|g|iu|units?|mmhg|mg/dl|g/dl|mmol/l|%)\b")
+# Birth-date column headers (EN/Hindi/Hinglish/regional) and full date-like cell values.
+_DOB_HEADER = re.compile(r"(?i)\b(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|birthdate|janam|janm|jonmo|huttida|janana)\b|जन्म")
+_DATE_LIKE = re.compile(r"\d{1,4}[/\-.]\d{1,2}[/\-.]\d{1,4}")
 _DOB_KEY = re.compile(r"(?i)^(?:birthDate|dob|date_of_birth|birthdate|janam|born|deathDate|deceasedDateTime)$")
 _DOB_LINE = re.compile(r"(?im)^.*\b(?:dob|date\s+of\s+birth|birth\s*date|janam|जन्म\s*तिथि)\b.*$")
 ID_KEY = re.compile(r"(?i)(?:^|_|\b)(?:name|naam|patient|uhid|mrn|aadha?a?r|abha|mobile|phone|contact|email)(?:$|_|\b)")
@@ -490,6 +493,7 @@ def audit(inp: Path, out: Path) -> dict:
     missing_out = [e for e in exported if not (out / e["output"]).is_file()]
     parse_ok = parse_fail = 0
     row_match = row_total = 0
+    dob_unshifted: Counter = Counter()  # birth-date cells identical in input and output (row/column aligned)
     fhir_refs_ok = fhir_refs_tot = fhir_dates_ok = fhir_dates_tot = 0
     fhir_refs_broken = 0  # references that resolved in the input bundle but not in its sanitized output
     parsed_cache: dict[str, _ParsedOutputFile] = {}
@@ -532,6 +536,13 @@ def audit(inp: Path, out: Path) -> dict:
                 irows = ipf.rows if ipf.rows is not None else []
                 row_total += 1
                 row_match += len(orows) == len(irows)
+                if irows and len(orows) == len(irows):
+                    dcols = [i for i, h in enumerate(irows[0]) if _DOB_HEADER.search(str(h))]
+                    for ir, orow in zip(irows[1:], orows[1:]):
+                        for ci in dcols:
+                            iv = ir[ci].strip() if ci < len(ir) else ""
+                            if iv and _DATE_LIKE.fullmatch(iv) and ci < len(orow) and orow[ci].strip() == iv:
+                                dob_unshifted[out_rel] += 1
             parse_ok += 1
         except (ValueError, csv.Error):
             parse_fail += 1
@@ -654,6 +665,9 @@ def audit(inp: Path, out: Path) -> dict:
                     resid_files[name] += contam
                 else:
                     inst_preserved += len(matched_inst)
+    for name_dob, n_dob in dob_unshifted.items():
+        pat["unshifted birth date"] += n_dob
+        resid_files[name_dob] += n_dob
     R["privacy"] = {
         "channels_scanned": len(channels),
         "independent_identity_values_from_input": len(ident),
