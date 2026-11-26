@@ -8,6 +8,7 @@ import re
 from urllib.parse import unquote_plus
 
 from . import lexicon as L
+from .privacy import format_band
 from .engine import STOP_WORDS as STOPW
 from .engine import INDIC_DIG, RX_DOTTED_AADHAAR, RX_DOTTED_PHONE, _INDIC_DIGITS
 from .engine import (CLIN_PROTECT, COMMON_WORDS, DEVA, NAME_SEQ, NAME_TOK, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK,
@@ -27,20 +28,32 @@ class Masker:
         return _M0 + "".join(chr(_MB + int(c)) for c in str(len(self.store) - 1)) + _M1
 
     def restore(self, t: str) -> str:
+        if not self.store or _M0 not in t:
+            return t
         for _ in range(6):
-            n = _MARK.sub(lambda m: self.store[int("".join(str(ord(c) - _MB) for c in m.group(1)))], t)
-            if n == t:
+            t = _MARK.sub(lambda m: self.store[int("".join(str(ord(c) - _MB) for c in m.group(1)))], t)
+            if _M0 not in t:
                 break
-            t = n
         return t
 
 
 class Ctx:
     """Per-record scrubbing context."""
+    __slots__ = ("H", "psn", "days", "order", "_band", "_band_w", "_band_fixed", "stats", "rule")
 
     def __init__(self, H, psn: str | None, days: int, order: str, band, stats, rule=None):
-        self.H, self.psn, self.days, self.order, self.band, self.stats = H, psn, days, order, band, stats
-        self.rule = rule
+        self.H, self.psn, self.days, self.order, self.stats, self.rule = H, psn, days, order, stats, rule
+        if isinstance(band, tuple):
+            self._band = None
+            self._band_w, self._band_fixed = band
+        else:
+            self._band = band
+            self._band_w, self._band_fixed = 5, None
+
+    def band(self, age: int) -> str:
+        if self._band is not None:
+            return self._band(age)
+        return format_band(age, self._band_w, self._band_fixed)
 
     @property
     def patient_token(self) -> str:
@@ -58,6 +71,20 @@ _RX_ID_SEP = re.compile(r"[\s/\-_.]+")
 _RX_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
+class _NoopSub:
+    """Zero-cost matcher when a harvested collection is empty."""
+    @staticmethod
+    def sub(repl, text: str) -> str:
+        return text
+
+    @staticmethod
+    def search(text: str):
+        return None
+
+
+_NOOP_SUB = _NoopSub()
+
+
 class _TokenSetSub:
     """O(L) drop-in replacement for large single-token regex alternations."""
 
@@ -69,6 +96,8 @@ class _TokenSetSub:
 
     def sub(self, repl, text: str) -> str:
         cf, p = self.casefold, self.pure
+        if not cf and self.fallback_rx is None and text.isascii():
+            return text
         def _fn(m):
             k = m.group(0).casefold() if cf else m.group(0)
             return repl(m) if k in p else m.group(0)
@@ -84,22 +113,38 @@ class _TokenSetSub:
 
 
 class _PhraseIndexSub:
-    """O(L) prefix-token indexed matcher for large multi-word name/place alternations."""
+    """O(L) rarest-token scalar-first indexed matcher with full-token gating for large phrase alternations."""
 
     def __init__(self, items: list[str], tok_rx: re.Pattern, pat_builder, casefold: bool):
         self.tok_rx = tok_rx
         self.casefold = casefold
         self.pat_builder = pat_builder
-        self.by_first: dict[str, list[str]] = defaultdict(list)
+        self.by_anchor: dict[str, tuple[str, tuple[str, ...]] | list[tuple[str, tuple[str, ...]]]] = {}
         self.always: list[str] = []
+        parsed: list[tuple[str, tuple[str, ...]]] = []
+        tok_df: Counter = Counter()
         for it in items:
-            m = tok_rx.search(it)
-            if m:
-                k = m.group(0).casefold() if casefold else m.group(0)
-                self.by_first[k].append(it)
+            toks = tuple(dict.fromkeys(
+                (m.group(0).casefold() if casefold else m.group(0)) for m in tok_rx.finditer(it)
+            ))
+            if toks:
+                parsed.append((it, toks))
+                for t in toks:
+                    tok_df[t] += 1
             else:
                 self.always.append(it)
-        self.firsts = frozenset(self.by_first)
+        for it, toks in parsed:
+            anchor = min(toks, key=tok_df.__getitem__)
+            pair = (it, toks)
+            cur = self.by_anchor.get(anchor)
+            if cur is None:
+                self.by_anchor[anchor] = pair
+            elif isinstance(cur, list):
+                cur.append(pair)
+            else:
+                self.by_anchor[anchor] = [cur, pair]
+        del parsed, tok_df
+        self.anchors = frozenset(self.by_anchor)
         self.always_rx = pat_builder(self.always) if self.always else None
         self._cache: dict[tuple[str, ...], re.Pattern] = {}
 
@@ -107,7 +152,7 @@ class _PhraseIndexSub:
         key = tuple(cands)
         rx = self._cache.get(key)
         if rx is None:
-            if len(self._cache) > 4096:
+            if len(self._cache) >= 256:
                 self._cache.clear()
             cands_sorted = sorted(dict.fromkeys(cands), key=len, reverse=True)
             rx = self.pat_builder(cands_sorted)
@@ -115,12 +160,21 @@ class _PhraseIndexSub:
         return rx
 
     def _cands(self, text: str) -> list[str]:
-        hits = {(m.group(0).casefold() if self.casefold else m.group(0)) for m in self.tok_rx.finditer(text)} & self.firsts
+        txt_toks = {(m.group(0).casefold() if self.casefold else m.group(0)) for m in self.tok_rx.finditer(text)}
+        hits = txt_toks & self.anchors
         if not hits:
             return []
         cands: list[str] = []
         for h in sorted(hits):
-            cands.extend(self.by_first[h])
+            bkt = self.by_anchor[h]
+            if isinstance(bkt, tuple):
+                it, req = bkt
+                if len(req) == 1 or all(t in txt_toks for t in req):
+                    cands.append(it)
+            else:
+                for it, req in bkt:
+                    if len(req) == 1 or all(t in txt_toks for t in req):
+                        cands.append(it)
         return cands
 
     def sub(self, repl, text: str) -> str:
@@ -138,7 +192,7 @@ class _PhraseIndexSub:
 
 
 class _IdIndexSub:
-    """O(L) 4-gram-indexed matcher for large H.ids collections (invariant under separators)."""
+    """O(L) rarest-4-gram scalar-first indexed matcher with exact canonical containment gating."""
 
     def __init__(self, ids: list[str]):
         self.always: list[str] = []
@@ -152,10 +206,18 @@ class _IdIndexSub:
                 canon_pairs.append((it, c))
                 for k in {c[j:j + 4] for j in range(len(c) - 3)}:
                     gram_df[k] += 1
-        self.by_gram: dict[str, list[str]] = defaultdict(list)
+        self.by_gram: dict[str, tuple[str, str] | list[tuple[str, str]]] = {}
         for it, c in canon_pairs:
             best = min((c[j:j + 4] for j in range(len(c) - 3)), key=lambda g: gram_df[g])
-            self.by_gram[best].append(it)
+            pair = (it, c)
+            cur = self.by_gram.get(best)
+            if cur is None:
+                self.by_gram[best] = pair
+            elif isinstance(cur, list):
+                cur.append(pair)
+            else:
+                self.by_gram[best] = [cur, pair]
+        del canon_pairs, gram_df
         self.grams = frozenset(self.by_gram)
         self.always_rx = self._build_sorted(self.always) if self.always else None
         self._cache: dict[tuple[str, ...], re.Pattern] = {}
@@ -175,14 +237,22 @@ class _IdIndexSub:
             return []
         cands: list[str] = []
         for h in sorted(hits):
-            cands.extend(self.by_gram[h])
+            bkt = self.by_gram[h]
+            if isinstance(bkt, tuple):
+                it, c = bkt
+                if c in compact:
+                    cands.append(it)
+            else:
+                for it, c in bkt:
+                    if c in compact:
+                        cands.append(it)
         return cands
 
     def _compile(self, cands: list[str]) -> re.Pattern:
         key = tuple(cands)
         rx = self._cache.get(key)
         if rx is None:
-            if len(self._cache) > 4096:
+            if len(self._cache) >= 256:
                 self._cache.clear()
             rx = self._build_sorted(cands)
             self._cache[key] = rx
@@ -226,10 +296,18 @@ class Sweeper:
         def _compile_place(items):
             return re.compile(rf"(?i)(?<![A-Za-z{DEVA}])(?:{alt(items, lambda n: sep.join(re.escape(x) for x in n.split()))})(?![A-Za-z{DEVA}])")
 
-        self.rx_lat_full = _compile_lat_full(lat_full) if len(lat_full) <= 64 else _PhraseIndexSub(lat_full, _RX_ASCII_WORD, _compile_lat_full, True)
-        self.rx_dev_full = _compile_dev_full(dev_full) if len(dev_full) <= 64 else _PhraseIndexSub(dev_full, _RX_DEVA_WORD, _compile_dev_full, False)
+        if not lat_full:
+            self.rx_lat_full = _NOOP_SUB
+        else:
+            self.rx_lat_full = _compile_lat_full(lat_full) if len(lat_full) <= 64 else _PhraseIndexSub(lat_full, _RX_ASCII_WORD, _compile_lat_full, True)
+        if not dev_full:
+            self.rx_dev_full = _NOOP_SUB
+        else:
+            self.rx_dev_full = _compile_dev_full(dev_full) if len(dev_full) <= 64 else _PhraseIndexSub(dev_full, _RX_DEVA_WORD, _compile_dev_full, False)
 
-        if len(lat_tok) <= 64:
+        if not lat_tok:
+            self.rx_lat_tok = _NOOP_SUB
+        elif len(lat_tok) <= 64:
             self.rx_lat_tok = re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(lat_tok, re.escape)})(?![A-Za-z])")
         else:
             pure = frozenset(t.casefold() for t in lat_tok if t.isascii() and t.isalpha())
@@ -237,7 +315,9 @@ class Sweeper:
             fb = re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(other, re.escape)})(?![A-Za-z])") if other else None
             self.rx_lat_tok = _TokenSetSub(_RX_ASCII_WORD, pure, True, fb)
 
-        if len(dev_tok) <= 64:
+        if not dev_tok:
+            self.rx_dev_tok = _NOOP_SUB
+        elif len(dev_tok) <= 64:
             self.rx_dev_tok = re.compile(rf"(?<![{DEVA}])(?:{alt(dev_tok, re.escape)})(?![{DEVA}])")
         else:
             pure = frozenset(t for t in dev_tok if all("\u0900" <= c <= "\u097f" for c in t))
@@ -246,10 +326,15 @@ class Sweeper:
             self.rx_dev_tok = _TokenSetSub(_RX_DEVA_WORD, pure, False, fb)
 
         places = sorted((p for p in H.places if p not in H.safe_places), key=len, reverse=True)
-        self.rx_place = _compile_place(places) if len(places) <= 64 else _PhraseIndexSub(places, _RX_ASCII_WORD, _compile_place, True)
+        if not places:
+            self.rx_place = _NOOP_SUB
+        else:
+            self.rx_place = _compile_place(places) if len(places) <= 64 else _PhraseIndexSub(places, _RX_ASCII_WORD, _compile_place, True)
 
         ids = sorted(H.ids, key=len, reverse=True)
-        if len(ids) <= 64:
+        if not ids:
+            self.rx_ids = _NOOP_SUB
+        elif len(ids) <= 64:
             id_sep = r"[\s/\-_.]*"
             self.rx_ids = re.compile(
                 rf"(?i)(?<![A-Za-z0-9])(?:{alt(ids, lambda i: id_sep.join(re.escape(c) for c in i))})(?![A-Za-z0-9])")
@@ -257,7 +342,9 @@ class Sweeper:
             self.rx_ids = _IdIndexSub(ids)
 
         digs = sorted(H.id_digits | H.phones, key=len, reverse=True)
-        if len(digs) <= 64:
+        if not digs:
+            self.rx_digits = _NOOP_SUB
+        elif len(digs) <= 64:
             self.rx_digits = re.compile(rf"(?<!\d)(?:{alt(digs, re.escape)})(?!\d)")
         else:
             pure = frozenset(d for d in digs if d.isascii() and d.isdigit())
@@ -366,14 +453,16 @@ _RX_PCT = re.compile(r"(?:%[0-9a-fA-F]{2}){2,}")
 
 def _decode_hidden(text: str) -> str:
     """Normalise zero-width joiners, homoglyph spoofs, unicode/HTML/percent escapes before scrubbing."""
-    t = re.sub(r"[\u200b\u2060\ufeff]", "", text)
-    t = re.sub(r"(?<=[A-Za-z0-9])[\u200c\u200d]+(?=[A-Za-z0-9])", "", t)
-    if _NONCONF_CYR.search(t):
-        def _fix_homo(m):
-            tok = m.group(0)
-            rep = tok.translate(_HOMOGLYPHS)
-            return rep if not _NONCONF_CYR.search(rep) else tok
-        t = _HOMO_TOK.sub(_fix_homo, t)
+    t = text
+    if not t.isascii():
+        t = re.sub(r"[\u200b\u2060\ufeff]", "", t)
+        t = re.sub(r"(?<=[A-Za-z0-9])[\u200c\u200d]+(?=[A-Za-z0-9])", "", t)
+        if _NONCONF_CYR.search(t):
+            def _fix_homo(m):
+                tok = m.group(0)
+                rep = tok.translate(_HOMOGLYPHS)
+                return rep if not _NONCONF_CYR.search(rep) else tok
+            t = _HOMO_TOK.sub(_fix_homo, t)
     if "\\u" in t:
         def _uesc(m):
             cp = int(m.group(1), 16)
@@ -556,12 +645,18 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
             return put(tag)
         return f
 
-    if allow_b64:
+    if allow_b64 and len(t) >= 12:
         def _put_if_changed(fn, m):
             s = fn(m.group(0), ctx, sw)
             return put(s) if s != m.group(0) else m.group(0)
-        t = RX_B64.sub(lambda m: _put_if_changed(b64_scrub, m), t)
+        if len(t) >= 24:
+            t = RX_B64.sub(lambda m: _put_if_changed(b64_scrub, m), t)
         t = RX_HEX.sub(lambda m: _put_if_changed(hex_scrub, m), t)
+
+    has_dig = any(c.isdigit() for c in t)
+    has_paren = "(" in t
+    t_ascii = t.isascii()
+    t_low = t.lower()
 
     # 1. labelled address lines -> district level only
     def addr(m):
@@ -570,47 +665,54 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         if ctx.rule is not None and ctx.rule.dist == "drop":
             return head + put("[ADDRESS]")
         return head + put(generalize_address(m.group(1)))
-    t = RX_ADDR_LINE.sub(addr, t)
+    if ":" in t or "：" in t or "-" in t or "=" in t or not t_ascii:
+        t = RX_ADDR_LINE.sub(addr, t)
 
     # 2. protect URLs (scrubbing query params first), attachment filenames, doctor names
-    t = RX_URL.sub(lambda m: _scrub_url(m.group(0), ctx, sw, put), t)
-    t = RX_ATTACH_FILE.sub(lambda m: _scrub_attach(m, ctx, sw, put), t)
+    if ":" in t or "/" in t:
+        t = RX_URL.sub(lambda m: _scrub_url(m.group(0), ctx, sw, put), t)
+    if "." in t:
+        t = RX_ATTACH_FILE.sub(lambda m: _scrub_attach(m, ctx, sw, put), t)
     t = RX_DOCTOR.sub(lambda m: put(m.group(0)), t)
 
     # 3. dates -> per-patient shift (masked so later digit rules never touch them)
-    t = shift_dates_in(t, ctx.days, ctx.order, wrap=put)
+    if has_dig and ctx.days:
+        t = shift_dates_in(t, ctx.days, ctx.order, wrap=put)
 
     # 4. strong identifiers
-    t = RX_EMAIL.sub(red("[EMAIL]"), t)
-    t = RX_MASKED_AADHAAR.sub(red("[AADHAAR]"), t)
-    t = RX_DOTTED_AADHAAR.sub(red("[AADHAAR]"), t)
-    t = RX_DOTTED_PHONE.sub(red("[PHONE]"), t)
+    if "@" in t:
+        t = RX_EMAIL.sub(red("[EMAIL]"), t)
+    if has_dig:
+        t = RX_MASKED_AADHAAR.sub(red("[AADHAAR]"), t)
+        t = RX_DOTTED_AADHAAR.sub(red("[AADHAAR]"), t)
+        t = RX_DOTTED_PHONE.sub(red("[PHONE]"), t)
     t = sw.rx_ids.sub(lambda m: (st.__setitem__("identifiers", st["identifiers"] + 1), put(ctx.psn or "[ID]"))[1], t)
 
-    def digrun(m):
-        kind = classify_digits(m.group(1))
-        if not kind:
-            return m.group(0)
-        st["identifiers"] += 1
-        return put(f"[{kind}]")
-    t = RX_DIGITRUN.sub(digrun, t)
-    t = RX_PAN.sub(red("[PAN]"), t)
+    if has_dig:
+        def digrun(m):
+            kind = classify_digits(m.group(1))
+            if not kind:
+                return m.group(0)
+            st["identifiers"] += 1
+            return put(f"[{kind}]")
+        t = RX_DIGITRUN.sub(digrun, t)
+        t = RX_PAN.sub(red("[PAN]"), t)
 
-    def idtok(m):
-        tok = m.group(0)
-        if not id_digits_ok(tok):
-            return tok
-        st["identifiers"] += 1
-        return put(ctx.psn or "[ID]")
-    t = RX_IDTOK.sub(idtok, t)
-    t = sw.rx_digits.sub(red("[ID]"), t)
+        def idtok(m):
+            tok = m.group(0)
+            if not id_digits_ok(tok):
+                return tok
+            st["identifiers"] += 1
+            return put(ctx.psn or "[ID]")
+        t = RX_IDTOK.sub(idtok, t)
+        t = sw.rx_digits.sub(red("[ID]"), t)
 
-    def idlab(m):
-        st["identifiers"] += 1
-        return m.group(0)[: m.start(1) - m.start(0)] + put(ctx.psn or "[ID]")
-    t = RX_ID_LABEL.sub(idlab, t)
+        def idlab(m):
+            st["identifiers"] += 1
+            return m.group(0)[: m.start(1) - m.start(0)] + put(ctx.psn or "[ID]")
+        t = RX_ID_LABEL.sub(idlab, t)
 
-    if os.environ.get("RAKSHAK_P_CLINICAL_PROTECT") != "off":   # ablation switch
+    if (has_dig or "asha" in t_low or "'" in t or not t_ascii) and os.environ.get("RAKSHAK_P_CLINICAL_PROTECT") != "off":   # ablation switch
         for rx in L_CLIN:
             t = rx.sub(lambda m: put(m.group(0)), t)
 
@@ -625,7 +727,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         end = (idx + len(joined)) if idx >= 0 else len(seq)
         st["identifiers"] += 1
         return m.group(0)[: m.start(m.lastindex) - m.start(0)] + put(ctx.patient_token) + seq[end:]
-    t = RX_LABEL.sub(lab, t)
+    if ":" in t or "：" in t or "=" in t or "-" in t or not t_ascii:
+        t = RX_LABEL.sub(lab, t)
 
     def pre_kin(m):
         toks = clean_name_seq(m.group(1))
@@ -638,37 +741,40 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         lead = m.group(0)[: m.start(1) - m.start(0)]
         return lead + put(ctx.patient_token) + seq[end:] + m.group(0)[m.end(1) - m.start(0):]
-    t = RX_PRE_KIN.sub(pre_kin, t)
+    if "," in t:
+        t = RX_PRE_KIN.sub(pre_kin, t)
 
-    def pre_paren_kin(m):
-        if "." in m.group(1):
-            return m.group(0)
-        toks = clean_name_seq(m.group(1))
-        rtoks = clean_name_seq(m.group(2))
-        if (not toks or not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))
-                or (len(toks) == 1 and len(toks[0]) <= 2 and toks[0].isascii())
-                or toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness")
-                or not rtoks or not _name_ok(rtoks) or L.COMPLAINT_WORDS.match(rtoks[0])
-                or not (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
-            return m.group(0)
-        seq = m.group(1)
-        joined = " ".join(toks)
-        idx = seq.find(joined)
-        end = (idx + len(joined)) if idx >= 0 else len(seq)
-        st["identifiers"] += 1
-        rel_part = put("[RELATIVE]")
-        between = m.group(0)[m.end(1) - m.start(0):m.start(2) - m.start(0)]
-        tail = m.group(0)[m.end(2) - m.start(0):]
-        return put(ctx.patient_token) + seq[end:] + between + rel_part + tail
-    t = RX_PRE_PAREN_KIN.sub(pre_paren_kin, t)
+    if has_paren:
+        def pre_paren_kin(m):
+            if "." in m.group(1):
+                return m.group(0)
+            toks = clean_name_seq(m.group(1))
+            rtoks = clean_name_seq(m.group(2))
+            if (not toks or not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))
+                    or (len(toks) == 1 and len(toks[0]) <= 2 and toks[0].isascii())
+                    or toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness")
+                    or not rtoks or not _name_ok(rtoks) or L.COMPLAINT_WORDS.match(rtoks[0])
+                    or not (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+                return m.group(0)
+            seq = m.group(1)
+            joined = " ".join(toks)
+            idx = seq.find(joined)
+            end = (idx + len(joined)) if idx >= 0 else len(seq)
+            st["identifiers"] += 1
+            rel_part = put("[RELATIVE]")
+            between = m.group(0)[m.end(1) - m.start(0):m.start(2) - m.start(0)]
+            tail = m.group(0)[m.end(2) - m.start(0):]
+            return put(ctx.patient_token) + seq[end:] + between + rel_part + tail
+        t = RX_PRE_PAREN_KIN.sub(pre_paren_kin, t)
 
-    def kin_poss(m):
-        toks = clean_name_seq(m.group(1))
-        if not _name_ok(toks):
-            return m.group(0)
-        st["identifiers"] += 1
-        return m.group(0)[: m.start(1) - m.start(0)] + put("[RELATIVE]") + m.group(0)[m.end(1) - m.start(0):]
-    t = RX_KIN_POSS.sub(kin_poss, t)
+    if "'" in t or "’" in t or "nte" in t_low:
+        def kin_poss(m):
+            toks = clean_name_seq(m.group(1))
+            if not _name_ok(toks):
+                return m.group(0)
+            st["identifiers"] += 1
+            return m.group(0)[: m.start(1) - m.start(0)] + put("[RELATIVE]") + m.group(0)[m.end(1) - m.start(0):]
+        t = RX_KIN_POSS.sub(kin_poss, t)
 
     def kin(m):
         rel, seq = m.group(1), m.group(2)
@@ -714,14 +820,16 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(g) - m.start(0)] + put("[NAME]") + rest + m.group(0)[m.end(g) - m.start(0):]
     t = RX_CTX_NAME.sub(ctxname, t)
     t = RX_CONSENT.sub(ctxname, t)
-    def _pt_prose(m):
-        toks = m.group(1).split()
-        if not _name_ok(toks) or any(w.lower() in STOPW for w in toks):
-            return m.group(0)
-        st["identifiers"] += 1
-        return m.group(0)[:m.start(1) - m.start(0)] + put(ctx.patient_token)
-    t = _RX_PT_PROSE.sub(_pt_prose, t)
-    t = RX_SIGN_PAREN.sub(lambda m: m.group(1) + put("[NAME]") + m.group(3) if _name_ok(m.group(2).split()) else m.group(0), t)
+    if "Patient " in t:
+        def _pt_prose(m):
+            toks = m.group(1).split()
+            if not _name_ok(toks) or any(w.lower() in STOPW for w in toks):
+                return m.group(0)
+            st["identifiers"] += 1
+            return m.group(0)[:m.start(1) - m.start(0)] + put(ctx.patient_token)
+        t = _RX_PT_PROSE.sub(_pt_prose, t)
+    if has_paren:
+        t = RX_SIGN_PAREN.sub(lambda m: m.group(1) + put("[NAME]") + m.group(3) if _name_ok(m.group(2).split()) else m.group(0), t)
 
     def nverb(m):
         toks = m.group(1).split()
@@ -730,13 +838,14 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return put("[NAME]") + m.group(0)[m.end(1) - m.start(0):]
     t = RX_NAME_VERB.sub(nverb, t)
-    def _name_role(m):
-        toks = clean_name_seq(m.group(1))
-        if not toks or not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
-            return m.group(0)
-        st["identifiers"] += 1
-        return put("[RELATIVE]") + m.group(0)[m.end(1) - m.start(0):]
-    t = RX_NAME_ROLE.sub(_name_role, t)
+    if has_paren:
+        def _name_role(m):
+            toks = clean_name_seq(m.group(1))
+            if not toks or not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
+                return m.group(0)
+            st["identifiers"] += 1
+            return put("[RELATIVE]") + m.group(0)[m.end(1) - m.start(0):]
+        t = RX_NAME_ROLE.sub(_name_role, t)
 
     def surname(m):
         first = m.group(1).split()
@@ -747,13 +856,16 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t = RX_SURNAME.sub(surname, t)
 
     # 6. harvested names anywhere (full names first, then single tokens)
-    for rx in (sw.rx_lat_full, sw.rx_dev_full):
-        t = rx.sub(red("[NAME]"), t)
-    for rx in (sw.rx_lat_tok, sw.rx_dev_tok):
-        t = rx.sub(red("[NAME]"), t)
+    t = sw.rx_lat_full.sub(red("[NAME]"), t)
+    if not t_ascii:
+        t = sw.rx_dev_full.sub(red("[NAME]"), t)
+    t = sw.rx_lat_tok.sub(red("[NAME]"), t)
+    if not t_ascii:
+        t = sw.rx_dev_tok.sub(red("[NAME]"), t)
 
     # 7. address fragments
-    t = RX_HOUSE.sub(red("[ADDRESS]"), t)
+    if has_dig:
+        t = RX_HOUSE.sub(red("[ADDRESS]"), t)
     t = RX_MOHALLA.sub(red("[LOCALITY]"), t)
     t = RX_LANDMARK.sub(red("[LANDMARK]"), t)
 
@@ -766,46 +878,50 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t = RX_VILL.sub(vill, t)
     t = sw.rx_place.sub(red("[PLACE]"), t)
 
-    def dvill(m):
-        if norm(m.group(0)) in ctx.H.safe_places:
-            return m.group(0)
-        st["identifiers"] += 1
-        return put("[VILLAGE]")
-    t = RX_DEVA_VILLAGE.sub(dvill, t)
+    if not t_ascii:
+        def dvill(m):
+            if norm(m.group(0)) in ctx.H.safe_places:
+                return m.group(0)
+            st["identifiers"] += 1
+            return put("[VILLAGE]")
+        t = RX_DEVA_VILLAGE.sub(dvill, t)
 
-    def pin(m):
-        if not m.group(1) and re.search(
-            r"(?:\d[\d.,]*\s*-\s*$|\b(?:platelets?|wbc|rbc|tlc|counts?|cells?|viral|copies)\s*[:\-=]?\s*$)",
-            m.string[max(0, m.start() - 24):m.start()],
-            re.I,
-        ):
-            return m.group(0)          # upper bound of a numeric range (e.g. 150000-410000) or cell count, not a PIN
-        st["identifiers"] += 1
-        g = 1 if m.group(1) else 3
-        keep = ctx.rule is None or ctx.rule.pin != "drop"
-        return m.group(0)[: m.start(g) - m.start(0)] + put(m.group(g) + "XXX" if keep else "[PIN]")
-    t = RX_PIN_CTX.sub(pin, t)
-    t = RX_WARD_ADDR.sub(red("[LOCALITY]"), t)
+    if has_dig:
+        def pin(m):
+            if not m.group(1) and re.search(
+                r"(?:\d[\d.,]*\s*-\s*$|\b(?:platelets?|wbc|rbc|tlc|counts?|cells?|viral|copies)\s*[:\-=]?\s*$)",
+                m.string[max(0, m.start() - 24):m.start()],
+                re.I,
+            ):
+                return m.group(0)          # upper bound of a numeric range (e.g. 150000-410000) or cell count, not a PIN
+            st["identifiers"] += 1
+            g = 1 if m.group(1) else 3
+            keep = ctx.rule is None or ctx.rule.pin != "drop"
+            return m.group(0)[: m.start(g) - m.start(0)] + put(m.group(g) + "XXX" if keep else "[PIN]")
+        t = RX_PIN_CTX.sub(pin, t)
+    if has_dig and "ward" in t_low:
+        t = RX_WARD_ADDR.sub(red("[LOCALITY]"), t)
 
     # 8. labelled ages -> truthful bands
-    def age(m):
-        if m.group(2):
-            a = int(m.group(2).translate(_INDIC_DIGITS))
-            return m.group(1) + put(ctx.band(a)) + (m.group(3) or "")
-        a = int(m.group(4).translate(_INDIC_DIGITS))
-        return put(ctx.band(a)) + m.group(5)
-    t = RX_AGE.sub(age, t)
+    if has_dig:
+        def age(m):
+            if m.group(2):
+                a = int(m.group(2).translate(_INDIC_DIGITS))
+                return m.group(1) + put(ctx.band(a)) + (m.group(3) or "")
+            a = int(m.group(4).translate(_INDIC_DIGITS))
+            return put(ctx.band(a)) + m.group(5)
+        t = RX_AGE.sub(age, t)
 
-    def age_free(m):
-        a = int(m.group(1))
-        if a > 120:
-            return m.group(0)
-        pre = t_view[max(0, m.start() - 12):m.start()].lower()
-        if re.search(r"(?:\bx|since|for|from|past|last|back|ago|×)\s*$", pre):
-            return m.group(0)
-        return put(ctx.band(a)) + m.group(2)
-    t_view = t
-    t = RX_AGE_FREE.sub(age_free, t)
+        def age_free(m):
+            a = int(m.group(1))
+            if a > 120:
+                return m.group(0)
+            pre = t_view[max(0, m.start() - 12):m.start()].lower()
+            if re.search(r"(?:\bx|since|for|from|past|last|back|ago|×)\s*$", pre):
+                return m.group(0)
+            return put(ctx.band(a)) + m.group(2)
+        t_view = t
+        t = RX_AGE_FREE.sub(age_free, t)
 
     out = M.restore(t)
     if (cache_key is not None and ctx.days != 0 and out == text

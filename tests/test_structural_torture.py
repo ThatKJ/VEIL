@@ -185,6 +185,78 @@ class StructuralTortureTests(unittest.TestCase):
             leftovers = [p.name for p in out.rglob("*") if ".veil_tmp_" in p.name or p.name.endswith(".tmp")]
             self.assertEqual(leftovers, [])
 
+    def test_mixed_format_exact_record_accounting_and_no_silent_loss(self):
+        """Reconcile raw physical lines vs logical VEIL records across CSV, stacked CSV, JSONL, @meta JSON, 50-line notes, and quarantine."""
+        with tempfile.TemporaryDirectory(prefix="veil_acct_") as d:
+            root = Path(d)
+            inp, out = root / "in", root / "out"
+            inp.mkdir()
+            (inp / "csv").mkdir()
+            # 1) Regular 10-row CSV (10 physical patient rows)
+            csv_lines = ["MRN,patient_name,age,sex,diagnosis"]
+            for i in range(10):
+                csv_lines.append(f"M-{900+i},Patient Acct{i},{30+i},M,Hypertension")
+            (inp / "csv" / "regular.csv").write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
+
+            # 2) Stacked CSV w/ preamble + repeat header -> strictly 3 data records
+            (inp / "csv" / "stacked.csv").write_text(
+                "HOSPITAL EXPORT BATCH 1\n"
+                "uhid,patient_name,dx\n"
+                "U-1,Meera Rao,Asthma\n"
+                "U-2,Kabir Das,Migraine\n"
+                "uhid,patient_name,dx\n"
+                "U-3,Ananya Iyer,Fever\n",
+                encoding="utf-8",
+            )
+
+            # 3) JSONL w/ 6 lines + empty lines -> strictly 6 records
+            jsonl_rows = [json.dumps({"uhid": f"J-{i}", "name": f"Ravi Verma{i}", "dx": "T2DM"}) for i in range(6)]
+            (inp / "opd.jsonl").write_text("\n".join(jsonl_rows[:3]) + "\n\n" + "\n".join(jsonl_rows[3:]) + "\n", encoding="utf-8")
+
+            # 4) Nested JSON w/ @meta (non-patient metadata) + 2 patient records -> strictly 2 patient records
+            (inp / "bundle.json").write_text(json.dumps({
+                "meta": {"hospital": "City Clinic", "exported_on": "2025-02-01"},
+                "records": [
+                    {"uhid": "B-1", "name": "Sita Nair", "dx": "Anemia"},
+                    {"uhid": "B-2", "name": "Mohan Lal", "dx": "Gastritis"},
+                ],
+            }), encoding="utf-8")
+
+            # 5) Two 50-line clinical notes (100 physical lines -> strictly 2 doc-level VEIL records, matching scale_titan note packing)
+            for ni in range(2):
+                note_lines = [f"Patient Name: Deepak Joshi{ni}  UHID: N-{10+ni}"] + [
+                    f"Progress Day {k}: BP 120/80 mmHg, HbA1c 6.5%" for k in range(49)
+                ]
+                (inp / f"note_{ni}.txt").write_text("\n".join(note_lines) + "\n", encoding="utf-8")
+
+            # 6) Binary unsupported file -> quarantined (0 records, never copied to sanitized/)
+            (inp / "scan.pdf").write_bytes(b"%PDF-1.4\n\x00binary\n")
+
+            with mock.patch.dict(os.environ, {"RAKSHA_SECRET": "acct-regression-secret"}):
+                rc = PL.run(inp, out, {})
+            self.assertEqual(rc, 0)
+
+            rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(rep["counts"]["files_total"], 7)
+            self.assertEqual(rep["counts"]["files_sanitized"], 6)
+            self.assertEqual(rep["counts"]["files_quarantined"], 1)
+            self.assertFalse((out / "sanitized" / "scan.pdf").exists())
+
+            rj = [json.loads(line) for line in (out / "records.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            # Expected: 10 (regular.csv) + 3 (stacked.csv) + 6 (opd.jsonl) + 2 (bundle.json) + 2 (note_0/1) = 23
+            self.assertEqual(len(rj), 23)
+            self.assertEqual(rep["counts"]["records_processed"], 23)
+            self.assertTrue(all(not r["loc"].startswith("@") for r in rj))
+            by_file = {}
+            for r in rj:
+                by_file[r["file"]] = by_file.get(r["file"], 0) + 1
+            self.assertEqual(by_file["sanitized/csv/regular.csv"], 10)
+            self.assertEqual(by_file["sanitized/csv/stacked.csv"], 3)
+            self.assertEqual(by_file["sanitized/opd.jsonl"], 6)
+            self.assertEqual(by_file["sanitized/bundle.json"], 2)
+            self.assertEqual(by_file["sanitized/note_0.txt"], 1)
+            self.assertEqual(by_file["sanitized/note_1.txt"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

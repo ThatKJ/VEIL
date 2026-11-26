@@ -170,6 +170,7 @@ _RX_DR_STAFF = re.compile(r"^(?:(?i:dr|sr|sis\.?|sister|nurse|staff\s+nurse|anm|
 _RX_LOOKS_ADDR = re.compile(r"(?i)\b(?:door|house|road|street|lane|ward|pin|near|opp|vill|post|dist|tk|dt)\b")
 _RX_CODE_ID = re.compile(r"[A-Z]{2,8}[\s/\-\d#:.]{3,24}")
 _RX_DIG3 = re.compile(r"\d{3}")
+_RX_DIGIT4 = re.compile(r"\d{4}")
 _RX_DIGIT1 = re.compile(r"\d")
 _RX_KIN_TAIL = re.compile(rf"(?i)(?:\n|\s+)\b({L.KIN})(?![A-Za-z{DEVA}])\.?\s*[:\-]?\s*(.+)$")
 _RX_SPACE_KIN = re.compile(r"(?i)\b(?:S/O|D/O|W/O|C/O)\b")
@@ -193,7 +194,6 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     s = str(v).strip()
     if not s:
         return
-    e = rec.ev
     if kind in ("NAME", "REL_NAME") and _RX_DR_STAFF.match(s):
         return                      # clinical staff, not a patient or relative
     if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
@@ -210,74 +210,79 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
             text_evidence(s, rec, H, order)
             return
     if kind == "NAME":
-        kin_m = re.search(rf"(?i)(?:\n|\s+)\b({L.KIN})(?![A-Za-z{DEVA}])\.?\s*[:\-]?\s*(.+)$", s)
+        kin_m = _RX_KIN_TAIL.search(s)
         pt_part = s[:kin_m.start()].strip() if kin_m else s
         rel_part = kin_m.group(1).strip() if kin_m else None
         H.add_name(pt_part)
-        toks = [t for t in re.split(r"[\s,]+", re.sub(r"(?i)\b(?:S/O|D/O|W/O|C/O)\b", " ", pt_part)) if t]
+        sp_clean = _RX_SPACE_KIN.sub(" ", pt_part) if "/" in pt_part else pt_part
+        toks = [t for t in _RX_COMMA_WS.split(sp_clean) if t]
         if toks:
-            e["names"].append(toks)
+            rec.add_name_toks(toks)
         if rel_part:
             H.add_name(rel_part)
-            rtoks = [t for t in re.split(r"[\s,]+", rel_part) if t]
+            rtoks = [t for t in _RX_COMMA_WS.split(rel_part) if t]
             if rtoks:
-                e["rel"].append(rtoks)
+                rec.add_rel_toks(rtoks)
         rec.is_patient = True
     elif kind == "REL_NAME":
-        rp = re.sub(r"(?i)^(?:Shri|Sri|Smt\.?|श्री|श्रीमती)\s+|'s\s+(?:wife|husband|son|daughter|father|mother)\b", " ", s).strip()
+        rp = _RX_REL_STRIP.sub(" ", s).strip()
         H.add_name(rp)
-        toks = [t for t in re.split(r"[\s,]+", re.sub(r"(?i)\b(?:S/O|D/O|W/O|H/O|C/O|Dikri|Patni|Puttar)\b\.?\s*\-?", " ", rp)) if t]
+        rp_clean = _RX_REL_KIN_STRIP.sub(" ", rp)
+        toks = [t for t in _RX_COMMA_WS.split(rp_clean) if t]
         if toks:
-            e["rel"].append(toks)
+            rec.add_rel_toks(toks)
     elif kind == "FAMILY_ID":
         H.add_id(s)
     elif kind == "MRN":
         H.add_id(s)
-        a = re.sub(r"[^0-9A-Za-z]", "", s).upper()
+        a = s if s.isascii() and s.isalnum() else _RX_NON_ALNUM_PL.sub("", s)
+        a = a.upper()
         if _phone_like(a):                       # a contact number in an ID-labelled field links as a phone
-            e["phones"].add(re.sub(r"\D", "", a)[-10:])
+            rec.add_phone(_RX_NON_DIG_PL.sub("", a)[-10:])
         elif len(a) >= 4:
-            e["ids"].add("M:" + a)
+            rec.add_id("M:" + a)
             rec.is_patient = True
     elif kind in ("AADHAAR", "ABHA"):
-        d = re.sub(r"\D", "", s.translate(_INDIC_DIGITS))
+        d_src = s if s.isascii() else s.translate(_INDIC_DIGITS)
+        d = _RX_NON_DIG_PL.sub("", d_src)
         if len(d) >= 8:
             H.id_digits.add(d)
-            e["ids"].add(("A:" if kind == "AADHAAR" else "B:") + d)
+            rec.add_id(("A:" if kind == "AADHAAR" else "B:") + d)
             rec.is_patient = True
     elif kind == "PAN":
         H.add_id(s)
-        e["ids"].add("N:" + s.upper())
+        rec.add_id("N:" + s.upper())
     elif kind == "INSURANCE":
         H.add_id(s)
-        a = re.sub(r"[^0-9A-Za-z]", "", s).upper()
+        a = (s if s.isascii() and s.isalnum() else _RX_NON_ALNUM_PL.sub("", s)).upper()
         if len(a) >= 5:
-            e["ids"].add("I:" + a)
+            rec.add_id("I:" + a)
     elif kind == "EMAIL":
-        H.ids.add(re.sub(r"[^0-9A-Za-z]", "", s).upper())
+        H.ids.add(_RX_NON_ALNUM_PL.sub("", s).upper())
         if _is_personal_email(s):
-            e["ids"].add("E:" + s.lower())
+            rec.add_id("E:" + s.lower())
     elif kind == "PHONE":
-        d = re.sub(r"\D", "", s.translate(_INDIC_DIGITS))
+        d_src = s if s.isascii() else s.translate(_INDIC_DIGITS)
+        d = _RX_NON_DIG_PL.sub("", d_src)
         if len(d) >= 10:
             d = d[-10:]
             H.phones.add(d)
-            e["phones"].add(d)
+            rec.add_phone(d)
     elif kind == "DOB":
         d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
-        e["dob"] = d.isoformat() if d else s
+        rec.dob = d.isoformat() if d else s
     elif kind == "DATE":
-        if not e["date"]:
+        if not rec.date:
             d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
             if d and 1990 <= d.year <= 2035:
-                e["date"] = d.year
+                rec.date = d.year
     elif kind == "AGE":
         a = age_of(s)
         if a is not None:
-            e["age"] = a
+            rec.age = a
     elif kind == "VILLAGE":
         H.add_place(s)
-        e["village"] = norm(s)
+        rec.village = norm(s)
     elif kind == "ADDRESS":
         for part in re.split(r"[,;]| - ", s):
             p = part.strip()
@@ -372,6 +377,205 @@ _PAT_HON_RX = re.compile(
 _RX_SQL_INS = re.compile(r"(?i)\bINSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES\s*\(([^;]+)\)")
 
 
+_SINGLE_COND_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _cond_fset(val: str) -> frozenset[str]:
+    fs = _SINGLE_COND_CACHE.get(val)
+    if fs is None:
+        if len(_SINGLE_COND_CACHE) >= 8192:
+            _SINGLE_COND_CACHE.clear()
+        s = sys.intern(val) if len(val) <= 80 else val
+        fs = frozenset((s,))
+        _SINGLE_COND_CACHE[s] = fs
+    return fs
+
+
+def _add_cond(rec: Rec, val: str) -> None:
+    cur = rec.conds
+    if cur is None:
+        rec.conds = _cond_fset(val)
+    elif isinstance(cur, frozenset):
+        if val not in cur:
+            rec.conds = cur | _cond_fset(val)
+    else:
+        cur.add(val)
+
+
+_TEXT_EV_CACHE: dict[tuple[str, str], tuple | None] = {}
+
+
+def _scan_plain_text_evidence(text: str, order: str):
+    """Pure extractor for plain text (no JSON/SQL/KV blocks); returns None when zero evidence."""
+    has_digit = any(c.isdigit() for c in text)
+    has_paren = "(" in text
+    conds: list[str] = []
+    h_names: list[str] = []
+    h_ids: list[str] = []
+    h_digs: list[str] = []
+    h_phones: list[str] = []
+    h_places: list[str] = []
+    names: list[list[str]] = []
+    rels: list[list[str]] = []
+    ev_ids: list[str] = []
+    ev_phones: list[str] = []
+    dob = None
+    age = None
+    gender = None
+    village = None
+    date_yr = None
+    is_patient = False
+
+    if has_digit:
+        for m in RX_ICD.finditer(text):
+            conds.append(m.group(1))
+    first_label = None
+    for m in RX_LABEL.finditer(text):
+        toks = clean_name_seq(m.group(m.lastindex))
+        if _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
+            h_names.append(" ".join(toks))
+            if first_label is None:
+                first_label = toks
+    for m in _PAT_HON_RX.finditer(text):
+        seq = m.group(1) or m.group(3)
+        toks = clean_name_seq(seq)
+        if _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
+            h_names.append(" ".join(toks))
+            if first_label is None:
+                first_label = toks
+    for m in RX_HON_BEFORE.finditer(text):
+        toks = clean_name_seq(m.group(2))
+        if _name_ok(toks):
+            h_names.append(" ".join(toks))
+    if not first_label:
+        for rx_k in ((RX_PRE_KIN, RX_PRE_PAREN_KIN) if has_paren else (RX_PRE_KIN,)):
+            for m in rx_k.finditer(text):
+                if rx_k is RX_PRE_PAREN_KIN and "." in m.group(1):
+                    continue
+                toks = clean_name_seq(m.group(1))
+                if not (_name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0]))):
+                    continue
+                if rx_k is RX_PRE_PAREN_KIN:
+                    if toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness"):
+                        continue
+                    rtoks = clean_name_seq(m.group(2))
+                    if not (rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
+                            and (rtoks[0][:1].isupper() or _RX_DEVA_CHR.search(rtoks[0]))):
+                        continue
+                h_names.append(" ".join(toks))
+                first_label = toks
+                break
+            if first_label:
+                break
+    if has_paren:
+        for m in RX_PRE_PAREN_KIN.finditer(text):
+            if "." in m.group(1):
+                continue
+            toks = clean_name_seq(m.group(1))
+            rtoks = clean_name_seq(m.group(2))
+            if (toks and _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0]))
+                    and toks[-1].lower() not in ("attendant", "relative", "visitor", "guardian", "witness")
+                    and rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
+                    and (rtoks[0][:1].isupper() or _RX_DEVA_CHR.search(rtoks[0]))):
+                h_names.append(" ".join(rtoks))
+                rels.append(rtoks)
+    if first_label:
+        names.append(first_label)
+        is_patient = True
+    if "'" in text or "’" in text or "nte" in text:
+        for m in RX_KIN_POSS.finditer(text):
+            toks = clean_name_seq(m.group(1))
+            if toks and _name_ok(toks):
+                h_names.append(" ".join(toks))
+                rels.append(toks)
+    for m in RX_KIN.finditer(text):
+        rel, toks = m.group(1), clean_name_seq(m.group(2))
+        if not toks or not _name_ok(toks):
+            continue
+        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
+            continue
+        h_names.append(" ".join(toks))
+        rels.append(toks)
+    if has_paren and "c/o" in text.lower():
+        for m in _RX_CO_PAREN.finditer(text):
+            toks = clean_name_seq(m.group(1))
+            if toks and _name_ok(toks):
+                h_names.append(" ".join(toks))
+                rels.append(toks)
+    if has_paren:
+        for m in RX_NAME_ROLE.finditer(text):
+            toks = clean_name_seq(m.group(1))
+            if toks and _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
+                h_names.append(" ".join(toks))
+                rels.append(toks)
+    if has_digit:
+        id_scan = _RX_URL_MASK.sub(" ", text) if ("/" in text or ":" in text) else text
+        for m in RX_IDTOK.finditer(id_scan):
+            tok = m.group(0)
+            if id_digits_ok(tok) and not _phone_like(_RX_NON_ALNUM_PL.sub("", tok)):
+                a = _RX_NON_ALNUM_PL.sub("", tok).upper()
+                ev_ids.append("M:" + a)
+                h_ids.append(tok)
+                is_patient = True
+        for m in RX_ID_LABEL.finditer(text):
+            tok = m.group(1).strip(" :-.")
+            digits = _RX_NON_DIG_PL.sub("", tok)
+            if len(digits) >= 4 and not re.fullmatch(r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}", tok):
+                a = _RX_NON_ALNUM_PL.sub("", tok).upper()
+                if len(a) >= 4 and not _phone_like(a):
+                    ev_ids.append("M:" + a)
+                    h_ids.append(tok)
+                    is_patient = True
+        for m in RX_DIGITRUN.finditer(text):
+            k = classify_digits(m.group(1))
+            d = _RX_NON_DIG_PL.sub("", m.group(1).translate(_INDIC_DIGITS))
+            if k == "PHONE":
+                ev_phones.append(d[-10:])
+                h_phones.append(d[-10:])
+            elif k in ("AADHAAR", "ABHA"):
+                ev_ids.append(("A:" if k == "AADHAAR" else "B:") + d)
+                h_digs.append(d)
+        for m in RX_DOTTED_PHONE.finditer(text):
+            d = _RX_NON_DIG_PL.sub("", m.group(0).translate(_INDIC_DIGITS))
+            if len(d) >= 10:
+                ev_phones.append(d[-10:])
+                h_phones.append(d[-10:])
+    if "@" in text:
+        for m in RX_EMAIL.finditer(text):
+            em = m.group(0).lower()
+            if _is_personal_email(em):
+                ev_ids.append("E:" + em)
+    if has_digit:
+        m = DOB_RX.search(text)
+        if m:
+            d = parse_date(m.group(1), order)
+            if d:
+                dob = d.isoformat()
+        m = _RX_AGE_TEXT.search(text)
+        if m:
+            age = int(m.group(1).translate(_INDIC_DIGITS))
+    m = _RX_GENDER_TEXT.search(text)
+    if m:
+        gender = gender_of(next(g for g in m.groups() if g))
+    for m in RX_VILL.finditer(text):
+        v = m.group(1) or m.group(2)
+        if v:
+            v = " ".join(t for t in v.split() if t.lower() not in STOP_WORDS)
+            if v:
+                h_places.append(v)
+                village = village or norm(v)
+    if has_digit:
+        dm = _RX_DATE_TEXT.search(text)
+        d = parse_date(dm.group(1), order) if dm else None
+        if d and 2015 <= d.year <= 2035:
+            date_yr = d.year
+    if not (conds or h_names or h_ids or h_digs or h_phones or h_places or names or rels or ev_ids or ev_phones
+            or dob is not None or age is not None or gender is not None or village is not None or date_yr is not None or is_patient):
+        return None
+    return (tuple(conds), tuple(h_names), tuple(h_ids), tuple(h_digs), tuple(h_phones), tuple(h_places),
+            tuple(names), tuple(rels), tuple(ev_ids), tuple(ev_phones), dob, age, gender, village, date_yr, is_patient)
+
+
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     if text.startswith("{"):
         po = _parse_json_str(text)
@@ -391,148 +595,60 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
                 ck = kind_of_key(col)
                 if ck and ck not in ("DOCTOR", "SAFE", "STRUCT", "RELATION", "DATE", "PIN"):
                     add_ev(rec, H, ck, val, order=order)
-    e = rec.ev
-    for lab, val, _, _ in kv_rows(text):
-        k = _kv_kind(lab, val)
-        if k and k not in ("ADDRESS", "PIN"):
-            add_ev(rec, H, k, val.strip(" *"), order=order)
-    for m in RX_ICD.finditer(text):
-        e.setdefault("conds", set()).add(m.group(1))
-    first_label = None
-    for m in RX_LABEL.finditer(text):
-        toks = clean_name_seq(m.group(m.lastindex))
-        if _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
-            H.add_name(" ".join(toks))
-            if first_label is None:
-                first_label = toks
-    for m in _PAT_HON_RX.finditer(text):
-        seq = m.group(1) or m.group(3)
-        toks = clean_name_seq(seq)
-        if _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
-            H.add_name(" ".join(toks))
-            if first_label is None:
-                first_label = toks
-    for m in RX_HON_BEFORE.finditer(text):
-        toks = clean_name_seq(m.group(2))
-        if _name_ok(toks):
-            H.add_name(" ".join(toks))
-    if not first_label:
-        for rx_k in (RX_PRE_KIN, RX_PRE_PAREN_KIN):
-            for m in rx_k.finditer(text):
-                if rx_k is RX_PRE_PAREN_KIN and "." in m.group(1):
-                    continue
-                toks = clean_name_seq(m.group(1))
-                if not (_name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0]))):
-                    continue
-                if rx_k is RX_PRE_PAREN_KIN:
-                    if toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness"):
-                        continue
-                    rtoks = clean_name_seq(m.group(2))
-                    if not (rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
-                            and (rtoks[0][:1].isupper() or _RX_DEVA_CHR.search(rtoks[0]))):
-                        continue
-                H.add_name(" ".join(toks))
-                first_label = toks
-                break
-            if first_label:
-                break
-    for m in RX_PRE_PAREN_KIN.finditer(text):
-        if "." in m.group(1):
-            continue
-        toks = clean_name_seq(m.group(1))
-        rtoks = clean_name_seq(m.group(2))
-        if (toks and _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0]))
-                and toks[-1].lower() not in ("attendant", "relative", "visitor", "guardian", "witness")
-                and rtoks and _name_ok(rtoks) and not L.COMPLAINT_WORDS.match(rtoks[0])
-                and (rtoks[0][:1].isupper() or _RX_DEVA_CHR.search(rtoks[0]))):
-            H.add_name(" ".join(rtoks))
-            e["rel"].append(rtoks)
-    if first_label:
-        e["names"].append(first_label)
+    has_kv_sep = ":" in text or "：" in text or "=" in text or "|" in text or "│" in text
+    if has_kv_sep:
+        for lab, val, _, _ in kv_rows(text):
+            k = _kv_kind(lab, val)
+            if k and k not in ("ADDRESS", "PIN"):
+                add_ev(rec, H, k, val.strip(" *"), order=order)
+    # Fast memoized path when no KV rows were present (common CSV diagnosis/medication/bp cells)
+    can_cache = (not has_kv_sep) and len(text) <= 120 and "\n" not in text
+    if can_cache:
+        ck = (text, order)
+        if ck in _TEXT_EV_CACHE:
+            res = _TEXT_EV_CACHE[ck]
+        else:
+            res = _scan_plain_text_evidence(text, order)
+            if len(_TEXT_EV_CACHE) >= 16384:
+                _TEXT_EV_CACHE.clear()
+            _TEXT_EV_CACHE[ck] = res
+    else:
+        res = _scan_plain_text_evidence(text, order)
+    if res is None:
+        return
+    conds, h_names, h_ids, h_digs, h_phones, h_places, names, rels, ev_ids, ev_phones, dob, age, gender, village, date_yr, is_patient = res
+    for c in conds:
+        _add_cond(rec, c)
+    for n in h_names:
+        H.add_name(n)
+    for i in h_ids:
+        H.add_id(i)
+    if h_digs:
+        H.id_digits.update(h_digs)
+    if h_phones:
+        H.phones.update(h_phones)
+    for p in h_places:
+        H.add_place(p)
+    for n in names:
+        rec.add_name_toks(n)
+    for rl in rels:
+        rec.add_rel_toks(rl)
+    for eid in ev_ids:
+        rec.add_id(eid)
+    for ep in ev_phones:
+        rec.add_phone(ep)
+    if dob is not None:
+        rec.dob = dob
+    if age is not None:
+        rec.age = age
+    if gender is not None:
+        rec.gender = gender
+    if village is not None and not rec.village:
+        rec.village = village
+    if date_yr is not None and rec.date is None:
+        rec.date = date_yr
+    if is_patient:
         rec.is_patient = True
-    for m in RX_KIN_POSS.finditer(text):
-        toks = clean_name_seq(m.group(1))
-        if toks and _name_ok(toks):
-            H.add_name(" ".join(toks))
-            e["rel"].append(toks)
-    for m in RX_KIN.finditer(text):
-        rel, toks = m.group(1), clean_name_seq(m.group(2))
-        if not toks or not _name_ok(toks):
-            continue
-        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
-            continue
-        H.add_name(" ".join(toks))
-        e["rel"].append(toks)
-    if "c/o" in text.lower():
-        for m in _RX_CO_PAREN.finditer(text):
-            toks = clean_name_seq(m.group(1))
-            if toks and _name_ok(toks):
-                H.add_name(" ".join(toks))
-                e["rel"].append(toks)
-    for m in RX_NAME_ROLE.finditer(text):
-        toks = clean_name_seq(m.group(1))
-        if toks and _name_ok(toks) and (toks[0][:1].isupper() or _RX_DEVA_CHR.search(toks[0])):
-            H.add_name(" ".join(toks))
-            e["rel"].append(toks)
-    id_scan = _RX_URL_MASK.sub(" ", text) if ("/" in text or ":" in text) else text
-    for m in RX_IDTOK.finditer(id_scan):
-        tok = m.group(0)
-        if id_digits_ok(tok) and not _phone_like(_RX_NON_ALNUM_PL.sub("", tok)):
-            a = _RX_NON_ALNUM_PL.sub("", tok).upper()
-            e["ids"].add("M:" + a)
-            H.add_id(tok)
-            rec.is_patient = True
-    for m in RX_ID_LABEL.finditer(text):
-        tok = m.group(1).strip(" :-.")
-        digits = _RX_NON_DIG_PL.sub("", tok)
-        if len(digits) >= 4 and not re.fullmatch(r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}", tok):
-            a = _RX_NON_ALNUM_PL.sub("", tok).upper()
-            if len(a) >= 4 and not _phone_like(a):
-                e["ids"].add("M:" + a)
-                H.add_id(tok)
-                rec.is_patient = True
-    for m in RX_DIGITRUN.finditer(text):
-        k = classify_digits(m.group(1))
-        d = _RX_NON_DIG_PL.sub("", m.group(1).translate(_INDIC_DIGITS))
-        if k == "PHONE":
-            e["phones"].add(d[-10:])
-            H.phones.add(d[-10:])
-        elif k in ("AADHAAR", "ABHA"):
-            e["ids"].add(("A:" if k == "AADHAAR" else "B:") + d)
-            H.id_digits.add(d)
-    for m in RX_DOTTED_PHONE.finditer(text):
-        d = _RX_NON_DIG_PL.sub("", m.group(0).translate(_INDIC_DIGITS))
-        if len(d) >= 10:
-            e["phones"].add(d[-10:])
-            H.phones.add(d[-10:])
-    if "@" in text:
-        for m in RX_EMAIL.finditer(text):
-            em = m.group(0).lower()
-            if _is_personal_email(em):
-                e["ids"].add("E:" + em)
-    m = DOB_RX.search(text)
-    if m:
-        d = parse_date(m.group(1), order)
-        if d:
-            e["dob"] = d.isoformat()
-    m = _RX_AGE_TEXT.search(text)
-    if m:
-        e["age"] = int(m.group(1).translate(_INDIC_DIGITS))
-    m = _RX_GENDER_TEXT.search(text)
-    if m:
-        e["gender"] = gender_of(next(g for g in m.groups() if g))
-    for m in RX_VILL.finditer(text):
-        v = m.group(1) or m.group(2)
-        if v:
-            v = " ".join(t for t in v.split() if t.lower() not in STOP_WORDS)
-            if v:
-                H.add_place(v)
-                e["village"] = e["village"] or norm(v)
-    if e["date"] is None:
-        dm = _RX_DATE_TEXT.search(text)
-        d = parse_date(dm.group(1), order) if dm else None
-        if d and 2015 <= d.year <= 2035:
-            e["date"] = d.year
 
 
 def guard_ids(recs: list) -> None:
@@ -540,23 +656,23 @@ def guard_ids(recs: list) -> None:
     from .linker import name_keys
     by = defaultdict(list)
     for r in recs:
-        for i in r.ev["ids"]:
+        for i in r.ids:
             by[i].append(r)
-        for p in r.ev["phones"]:
+        for p in r.phones:
             by["P:" + p].append(r)
     for i, rs in by.items():
         if len(rs) < 2:
             continue
-        genders = {r.ev["gender"] for r in rs if r.ev["gender"]}
-        dobs = {r.ev["dob"] for r in rs if r.ev["dob"]}
-        keys = [set(k) for r in rs for k in (name_keys(n) for n in r.ev["names"]) if k]
+        genders = {r.gender for r in rs if r.gender}
+        dobs = {r.dob for r in rs if r.dob}
+        keys = [set(k) for r in rs for k in (name_keys(n) for n in r.names) if k]
         disjoint = any(not (a & b) for x, a in enumerate(keys) for b in keys[x + 1:])
         if len(genders) > 1 or len(dobs) > 1 or disjoint:
             for r in rs:
                 if i.startswith("P:"):
-                    r.ev["phones"].discard(i[2:])
+                    r.discard_phone(i[2:])
                 else:
-                    r.ev["ids"].discard(i)
+                    r.discard_id(i)
 
 
 MAX_JSON_DEPTH = 64
@@ -639,11 +755,10 @@ def _patient_list(v, col_map: dict[str, str] | None = None) -> bool:
     for x in objs:
         r = Rec("", "")
         walk_evidence(x, None, r, Harvest(), "dmy", col_map=col_map)
-        e = r.ev
-        has_strong = bool(e["ids"] or e["phones"] or e["dob"])
+        has_strong = bool(r.ids or r.phones or r.dob)
         has_clin_shape = (any(cmap.get(k, k).lower() in _NON_PATIENT_KEYS for k in x)
-                          and not (has_strong or e["rel"] or e["age"] is not None or e["gender"]))
-        if (e["names"] and not has_clin_shape) or has_strong:
+                          and not (has_strong or r.rel or r.age is not None or r.gender))
+        if (r.names and not has_clin_shape) or has_strong:
             hits += 1
     return hits >= max(1, len(objs) // 2)
 
@@ -977,21 +1092,22 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
             if (eff_k == "gender" or toks & GENDER_TOK) and ck != "AGE":
                 g = gender_of(v) if isinstance(v, str) else None
                 if g:
-                    rec.ev["gender"] = g
+                    rec.gender = g
                 continue
             if ck == "AGE" and isinstance(v, str):
-                gm = re.search(r"(?i)/\s*([MF])\b", v)
+                gm = _RX_SEX_SLASH.search(v)
                 if gm:
-                    rec.ev["gender"] = gm.group(1).upper()
+                    rec.gender = gm.group(1).upper()
             if toks & DISTRICT_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
-                rec.ev.setdefault("district", v)
+                if rec.district is None:
+                    rec.district = v
                 continue
             if toks & TEHSIL_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
                 continue
             if toks & COND_TOK and isinstance(v, str):
-                rec.ev.setdefault("conds", set()).add(norm(v))
+                _add_cond(rec, norm(v))
             walk_evidence(v, ck, rec, H, order, rk, cmap)
     elif isinstance(obj, list):
         cols = _field_columns(obj)
@@ -1008,10 +1124,10 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
             walk_evidence(x, kind, rec, H, order, res_kind, col_map)
     elif isinstance(obj, (str, int, float)) and not isinstance(obj, bool):
         if kind == "DATE":
-            if isinstance(obj, str) and not rec.ev["date"]:
+            if isinstance(obj, str) and not rec.date:
                 d = parse_date(obj, order)
                 if d and 1990 <= d.year <= 2035:
-                    rec.ev["date"] = d.year
+                    rec.date = d.year
             return
         if kind in ("DOCTOR", "STRUCT", "RELATION"):
             return
@@ -1024,7 +1140,7 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None, co
                     text_evidence(obj, rec, H, order)
             return
         if kind == "COND" and isinstance(obj, str):
-            rec.ev.setdefault("conds", set()).add(norm(obj))
+            _add_cond(rec, norm(obj))
             return
         if kind == "NAME" and not isinstance(obj, str):
             return
@@ -1082,7 +1198,7 @@ def pass1(job: FileJob, H: Harvest):
                     obj = _lenient_obj(line, lenient_budget)
                 if not stream_mode:
                     job.data.append(obj)
-                r = Rec(job.rel, f"row:{i}")
+                r = Rec(job.rel, i)
                 if isinstance(obj, (dict, list)):
                     walk_evidence(obj, None, r, H, job.order)
                 else:
@@ -1166,8 +1282,13 @@ def pass1(job: FileJob, H: Harvest):
                 all_data = list(chain(table_head_rows, row_iter))
                 job.rows = all_data
                 data_iter = iter(all_data[1:])
+            cond_cols = [
+                (ci < len(header) and bool(set(L.key_tokens(header[ci])) & COND_TOK))
+                for ci in range(len(kinds))
+            ]
+            name_col_idx = [ci for ci, kk in enumerate(kinds) if kk == "NAME"]
             for i, row in enumerate(data_iter):
-                r = Rec(job.rel, f"row:{i}")
+                r = Rec(job.rel, i)
                 if (super_hdr and i == 0) or row == header or not any(v.strip() for v in row):
                     job.repeat_headers.add(i)
                     job.recs.append(r)
@@ -1184,36 +1305,37 @@ def pass1(job: FileJob, H: Harvest):
                     if k == "GENDER":
                         g_v = gender_of(v)
                         if g_v:
-                            r.ev["gender"] = sys.intern(g_v)
+                            r.gender = sys.intern(g_v)
                     elif k == "DISTRICT":
                         H.safe_places.add(norm(v))
-                        r.ev["district"] = sys.intern(v) if len(v) <= 64 else v
+                        r.district = sys.intern(v) if len(v) <= 64 else v
                     elif k == "TEHSIL":
                         H.safe_places.add(norm(v))
                     elif k == "COND" and v.strip():
-                        r.ev.setdefault("conds", set()).add(sys.intern(norm(v)) if len(v) <= 80 else norm(v))
+                        _add_cond(r, norm(v))
                     elif k == "NAME_SHAPE":
                         H.add_name(v)
                     elif k in (None, "SAFE"):
-                        if ci < len(header) and set(L.key_tokens(header[ci])) & COND_TOK and v.strip():
-                            r.ev.setdefault("conds", set()).add(norm(v))
+                        if ci < len(cond_cols) and cond_cols[ci] and v.strip():
+                            _add_cond(r, norm(v))
                         if len(v) > 3:
                             text_evidence(v, r, H, job.order)
                     elif k == "DATE":
-                        if not r.ev["date"]:
+                        if not r.date:
                             d = parse_date(v, job.order)
                             if d and 1990 <= d.year <= 2035:
-                                r.ev["date"] = d.year
+                                r.date = d.year
                     elif k not in ("DOCTOR", "RELATION", "STRUCT"):
                         add_ev(r, H, k, v, order=job.order)
-                        if k == "AGE" and isinstance(v, str):
-                            gm = re.search(r"(?i)/\s*([MF])\b", v)
+                        if k == "AGE" and isinstance(v, str) and "/" in v:
+                            gm = _RX_SEX_SLASH.search(v)
                             if gm:
-                                r.ev["gender"] = gm.group(1).upper()
+                                r.gender = gm.group(1).upper()
                 # split first/last name columns -> one name
-                names = [row[ci] for ci, k in enumerate(kinds) if k == "NAME" and ci < len(row) and row[ci].strip()]
-                if len(names) > 1:
-                    r.ev["names"] = [" ".join(names).split()]
+                if len(name_col_idx) > 1:
+                    names = [row[ci] for ci in name_col_idx if ci < len(row) and row[ci].strip()]
+                    if len(names) > 1:
+                        r.names = (tuple(" ".join(names).split()),)
                 job.recs.append(r)
             if stream_mode:
                 job.text = None
@@ -1252,6 +1374,7 @@ class Rewriter:
         self.H, self.sw, self.st, self.pol = H, sw, stats, policy
         self.rec_ids = H.ids if rec_ids is None else rec_ids
         self.rec_digs = H.id_digits if rec_digs is None else rec_digs
+        self._val_cache: dict[tuple, str] = {}
 
     def value(self, v, kind, ctx: Ctx, rec: Rec | None):
         st = self.st
@@ -1281,22 +1404,23 @@ class Rewriter:
         if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
             return scrub_text(kv_rewrite(s, self, ctx, rec), ctx, self.sw)
         if kind == "NAME":
-            if re.match(r"^(?:(?i:dr|sr|sis\.?|sn\.?|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+|(?:DEO|N/O)\s+)", s):
-                return s
+            if _RX_DR_STAFF.match(s) or s[:3].lower() == "sn ":
+                if _RX_DR_STAFF.match(s):
+                    return s
             st["identifiers"] += 1
-            if (len(re.sub(r"\D", "", s)) >= 3 and "," not in s and len(s.split()) <= 2) or (
-                re.fullmatch(r"[A-Z]{2,8}[\s/\-\d#:.]{3,24}", s) and re.search(r"\d{3}", s)
+            if (len(_RX_NON_DIG_PL.sub("", s)) >= 3 and "," not in s and len(s.split()) <= 2) or (
+                _RX_CODE_ID.fullmatch(s) and _RX_DIG3.search(s)
             ):
                 return ctx.psn or "[ID]"
             return ctx.patient_token
         if kind == "REL_NAME":
             st["identifiers"] += 1
-            m = re.match(r"(?i)\s*(S/O|D/O|W/O|H/O|C/O|S\.O\.|D\.O\.|W\.O\.)\.?\s*", s)
-            return (m.group(1) + " " if m else "") + "[RELATIVE]"
+            m = _RX_SPACE_KIN.match(s) if "/" in s or "." in s else None
+            return (m.group(0) + " " if m else "") + "[RELATIVE]"
         if kind in ("STRUCT", "RELATION"):
             return s
         if kind == "DOCTOR":
-            if re.search(r"(?i)(?:\bnaam\s*[=:]|\bpatient\b|\buhid\b|\bmrn\b|\d{4})", s):
+            if _RX_DIGIT4.search(s) or "naam" in s.lower() or "patient" in s.lower() or "uhid" in s.lower() or "mrn" in s.lower():
                 return scrub_text(s, ctx, self.sw)
             return s
         if kind == "MRN":
@@ -1337,7 +1461,7 @@ class Rewriter:
             st["generalized"] += 1
             if ctx.rule is not None and ctx.rule.dist == "drop":
                 return "[VILLAGE]"
-            dist = rec.ev.get("district") if rec else None
+            dist = rec.district if rec else None
             return dist or "[VILLAGE]"
         if kind == "ADDRESS":
             st["identifiers"] += 1
@@ -1348,23 +1472,37 @@ class Rewriter:
             st["generalized"] += 1
             if ctx.rule is not None and ctx.rule.dist == "drop":
                 return "[TEHSIL]"
-            return (rec.ev.get("district") if rec else None) or "[TEHSIL]"
+            return (rec.district if rec else None) or "[TEHSIL]"
         if kind == "DISTRICT" and ctx.rule is not None and ctx.rule.dist == "drop":
             st["identifiers"] += 1
             st["generalized"] += 1
             return "[DISTRICT]"
-        if kind in ("DISTRICT", "TEHSIL", "GENDER"):
+        if kind in ("DISTRICT", "TEHSIL", "GENDER") and not (kind == "DISTRICT" and ctx.rule is not None and ctx.rule.dist == "drop"):
             return scrub_text(s, ctx, self.sw) if re.search(r"\d{3}|[A-Z][a-z]+\s+[A-Z][a-z]+", s) else s
         if kind == "NAME_SHAPE":
             st["identifiers"] += 1
             return "[NAME]"
         if kind in (None, "SAFE", "COND"):
-            po = _parse_json_str(s)
-            if po is not None:
-                return json.dumps(self.walk(po, None, ctx, rec), ensure_ascii=False)
-        if kind is None and NAME_VALUE.fullmatch(s.strip()) and _name_ok(s.split()) and len(s.split()) >= 2:
-            st["identifiers"] += 1
-            return "[NAME]"
+            vkey = None
+            if len(s) <= 120 and "\n" not in s and ctx.days != 0:
+                ru = ctx.rule
+                rsig = (ru.band, ru.dist, ru.pin, ru.dob) if ru is not None else None
+                vkey = (kind, s, ctx.order, rsig)
+                vc = self._val_cache.get(vkey)
+                if vc is not None:
+                    return vc
+            if s.lstrip().startswith("{"):
+                po = _parse_json_str(s)
+                if po is not None:
+                    return json.dumps(self.walk(po, None, ctx, rec), ensure_ascii=False)
+            if kind is None and NAME_VALUE.fullmatch(s.strip()) and _name_ok(s.split()) and len(s.split()) >= 2:
+                st["identifiers"] += 1
+                return "[NAME]"
+            id0, gen0 = st["identifiers"], st["generalized"]
+            out = scrub_text(s, ctx, self.sw)
+            if vkey is not None and out == s and st["identifiers"] == id0 and st["generalized"] == gen0 and len(self._val_cache) < 16384:
+                self._val_cache[vkey] = out
+            return out
         return scrub_text(s, ctx, self.sw)
 
     def key(self, k: str, ctx: Ctx, seen: set) -> str:
@@ -1595,7 +1733,7 @@ def hl7_evidence(text, rec, H):
                 elif k == "GENDER":
                     g = gender_of(comp[0])
                     if g:
-                        rec.ev["gender"] = g
+                        rec.gender = g
                 elif k in ("PHONE", "AADHAAR", "INSURANCE"):
                     add_ev(rec, H, k, comp[0])
 
@@ -1725,21 +1863,27 @@ COMMON_FILE_WORDS = {"discharge", "summary", "report", "nursing", "notes", "rx",
 _VERIFY_TOK = re.compile(rf"[a-z0-9{DEVA}]{{3,}}")
 
 
-def build_verify_index(crit: list[str]) -> tuple[list[str], dict[str, list[str]]]:
-    """Index critical strings by their longest alnum/Indic token for O(N) verification."""
-    by_tok: dict[str, list[str]] = defaultdict(list)
+def build_verify_index(crit) -> tuple[list[str], dict[str, str | list[str]]]:
+    """Scalar-first index of critical strings by their longest alnum/Indic token for O(N) verification."""
+    by_tok: dict[str, str | list[str]] = {}
     fallback: list[str] = []
     for c in crit:
         toks = _VERIFY_TOK.findall(c)
         if toks:
             anchor = max(toks, key=len)
-            by_tok[anchor].append(c)
+            cur = by_tok.get(anchor)
+            if cur is None:
+                by_tok[anchor] = c
+            elif isinstance(cur, list):
+                cur.append(c)
+            else:
+                by_tok[anchor] = [cur, c]
         elif c:
             fallback.append(c)
     return fallback, by_tok
 
 
-def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, list[str]]] | None = None) -> tuple[str, int]:
+def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, str | list[str]]] | None = None) -> tuple[str, int]:
     """Exact-substring check of critical harvested values on the NFKC/casefold view; masks any survivor."""
     hits = 0
     M = Masker()
@@ -1747,11 +1891,16 @@ def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, li
     low = text.casefold()
     if index is not None:
         fallback, by_tok = index
-        cands = list(fallback)
+        cands = list(fallback) if fallback else []
         seen_toks = set(_VERIFY_TOK.findall(low))
         for tok in seen_toks:
-            if tok in by_tok:
-                cands.extend(by_tok[tok])
+            val = by_tok.get(tok)
+            if val is None:
+                continue
+            if isinstance(val, str):
+                cands.append(val)
+            else:
+                cands.extend(val)
         cands.sort(key=len, reverse=True)
     else:
         cands = crit
@@ -1943,22 +2092,22 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
     recs = [r for j in jobs for r in j.recs]
     date_orders = {j.rel: j.order for j in jobs}
     for r in recs:
-        if r.ev["dob"]:
+        if r.dob:
             j_order = date_orders[r.file]
-            d = parse_date(r.ev["dob"], j_order)
-            if d and r.ev.get("age") is not None and r.ev["age"] >= 75 and d.year >= 2000:
-                if (d.year - (2026 - r.ev["age"])) >= 90:
+            d = parse_date(r.dob, j_order)
+            if d and r.age is not None and r.age >= 75 and d.year >= 2000:
+                if (d.year - (2026 - r.age)) >= 90:
                     try:
                         d = d.replace(year=d.year - 100)
                     except ValueError:
                         d = d.replace(year=d.year - 100, day=28)
-            r.ev["dob"] = d.isoformat() if d else None
+            r.dob = d.isoformat() if d else None
     if str(policy.get("link", "on")) == "off":           # ablation only
         roots = list(range(len(recs)))
     else:
         if len(recs) >= 50_000:
             gc.collect()
-        linker = Linker([r.ev for r in recs], release=True)
+        linker = Linker(recs, release=True)
         roots = linker.run()
         del linker
     groups = defaultdict(list)
@@ -1970,7 +2119,7 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
     owners = {}
     for g, members in groups.items():
         for m in members:
-            for ident in m.ev["ids"]:
+            for ident in m.ids:
                 if owners.setdefault(ident, g) != g:
                     owners[ident] = None
     used_pids = set()
@@ -1978,7 +2127,7 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
     for g, members in groups.items():
         if not any(m.is_patient for m in members):
             continue
-        key = min((i for m in members for i in m.ev["ids"] if owners[i] == g), default=None)
+        key = min((i for m in members for i in m.ids if owners[i] == g), default=None)
         if key is None:
             first = min((m.file, m.loc) for m in members)
             key = json.dumps(first, ensure_ascii=False)
@@ -2007,41 +2156,52 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
     for j in jobs:
         for r in j.recs:
             total_recs += 1
-            ev = r.ev
-            for i in ev["ids"]:
+            for i in r.ids:
                 if ":" in i:
                     code = i.split(":", 1)[1].upper()
                     rec_ids.add(code)
                     d = _RX_NON_DIG_PL.sub("", code)
                     if len(d) >= 5:
                         rec_digs.add(d)
-            for p in ev["phones"]:
+            for p in r.phones:
                 code = _RX_NON_ALNUM_PL.sub("", p)
                 rec_ids.add(code)
                 d = _RX_NON_DIG_PL.sub("", code)
                 if len(d) >= 5:
                     rec_digs.add(d)
-            dist_keep = ev.get("district")
-            r.ev = {"district": dist_keep} if dist_keep else {}
+            r.release_ev()
     if total_recs >= 20_000:
         gc.collect()
 
     sw = Sweeper(H)
     rw = Rewriter(H, sw, st, policy, rec_ids=rec_ids, rec_digs=rec_digs)
-    crit = sorted({n for n in H.full_names if len(n) >= 6} | set(H.phones) |
-                  {d for d in H.id_digits if len(d) >= 6 and not (len(d) == 8 and parse_date(d, "dmy"))},
-                  key=len, reverse=True)
-    verify_idx = build_verify_index(crit)
     maxd = int(policy.get("date_shift_max_days", 180))
     verify_on = str(policy.get("verify", "on")) != "off"
+    if verify_on:
+        crit = sorted(
+            {n for n in H.full_names if len(n) >= 6} | H.phones |
+            {d for d in H.id_digits if len(d) >= 6 and not (len(d) == 8 and parse_date(d, "dmy"))},
+            key=len, reverse=True,
+        )
+        verify_idx = build_verify_index(crit)
+        del crit
+    else:
+        verify_idx = ([], {})
+    crit = []
+    H.full_names.clear()
+    H.id_digits.clear()
+    H.phones.clear()
+    H.places.clear()
+    if total_recs >= 50_000:
+        gc.collect()
 
     def ctx_for(rec: Rec | None, job: FileJob) -> Ctx:
         if rec is not None and rec.pid:
             days = P.days_for(rec.key, maxd)
-            band = plan.band_fn(rec.key)
+            band = plan.band_args(rec.key)
             return Ctx(H, rec.pid, days, job.order, band, st, plan.rule(rec.key))
         days = P.days_for(f"{job.rel}#{rec.loc}" if rec is not None else job.rel, maxd)
-        return Ctx(H, None, days, job.order, plan.band_fn(None), st, plan.default)
+        return Ctx(H, None, days, job.order, plan.band_args(None), st, plan.default)
 
     # ---- output names
     san = out / "sanitized"
@@ -2114,10 +2274,15 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                                     hdr_raw = next(row_iter)
                                     header = [scrub_text(h, hctx, sw) for h in hdr_raw]
 
+                                    _nl = "\r\n" if j.crlf else "\n"
+                                    _delim = j.delim
+
                                     def emit_row(values):
                                         if j.widths:
                                             fields = [v.ljust(b - a) for v, a, b in zip(values, j.widths, j.widths[1:])]
-                                            chunk_buf.append("".join(fields) + values[-1] + ("\r\n" if j.crlf else "\n"))
+                                            chunk_buf.append("".join(fields) + values[-1] + _nl)
+                                        elif all(_delim not in v and '"' not in v and "\n" not in v and "\r" not in v for v in values):
+                                            chunk_buf.append(_delim.join(values) + _nl)
                                         else:
                                             line_buf.seek(0)
                                             line_buf.truncate(0)
@@ -2203,11 +2368,13 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
                 for idx, r in enumerate(j.recs):
                     if idx in j.repeat_headers or r.loc.startswith("@"):
                         continue
-                    row = {"file": f"sanitized/{j.out_rel}", "loc": r.loc, "patient": r.pid}
+                    f_out = f"sanitized/{j.out_rel}"
                     if r.loc in j.out_locs:
-                        row["loc"], row["out"] = j.out_locs[r.loc]
-                        row["patient"] = None
-                    rjf.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+                        oloc, oout = j.out_locs[r.loc]
+                        row = {"file": f_out, "loc": oloc, "out": oout, "patient": None}
+                    else:
+                        row = {"file": f_out, "loc": r.loc, "patient": r.pid}
+                    rjf.write(json.dumps(row, ensure_ascii=False) + "\n")
                     records_total += 1
                     if row["patient"] is not None:
                         records_linked += 1

@@ -58,6 +58,16 @@ def consistent_band(ages: list[int], width: int) -> tuple[int, int] | None:
     return (lo_a // 10) * 10, ((hi_a // 10) * 10) + 9
 
 
+def format_band(age: int, w: int, fixed: tuple[int, int] | None) -> str:
+    if age < 0:
+        return "[AGE]"
+    if fixed and fixed[0] <= age <= fixed[1]:
+        if fixed[0] >= 85:
+            return "85-119"
+        return f"{fixed[0]}-{fixed[1]}"
+    return band_of(age, w)
+
+
 class Plan:
     def __init__(self, default: Rule, rules: dict, report: dict, bands: dict | None = None):
         self.default, self.rules, self.report = default, rules, report
@@ -66,29 +76,28 @@ class Plan:
     def rule(self, key) -> Rule:
         return self.rules.get(key, self.default)
 
+    def band_args(self, key) -> tuple[int, tuple[int, int] | None]:
+        w = self.rule(key).band
+        return w, self.bands.get((key, w))
+
     def band_fn(self, key):
         w = self.rule(key).band
         fixed = self.bands.get((key, w))
 
         def f(age):
-            if age < 0:
-                return "[AGE]"
-            if fixed and fixed[0] <= age <= fixed[1]:
-                if fixed[0] >= 85:
-                    return "85-119"
-                return f"{fixed[0]}-{fixed[1]}"
-            return band_of(age, w)
+            return format_band(age, w, fixed)
         return f
 
 
 def _profile(members) -> dict:
-    g = Counter(m.ev["gender"] for m in members if m.ev["gender"])
-    ages = [m.ev["age"] for m in members if m.ev["age"] is not None]
-    dobs = [m.ev["dob"] for m in members if m.ev["dob"]]
-    dist = Counter(str(m.ev.get("district")).strip().lower() for m in members if m.ev.get("district"))
+    g = Counter(m.gender for m in members if m.gender)
+    ages = [m.age for m in members if m.age is not None]
+    dobs = [m.dob for m in members if m.dob]
+    dist = Counter(str(m.district).strip().lower() for m in members if m.district)
     conds = set()
     for m in members:
-        conds |= m.ev.get("conds", set())
+        if m.conds:
+            conds |= m.conds
     birth = None
     if dobs:
         import re as _re
@@ -102,8 +111,13 @@ def _all_bands(groups, widths):
     out = {}
     for members in groups.values():
         key = next((m.key for m in members if m.key), None)
-        ages = [m.ev["age"] for m in members if m.ev["age"] is not None]
-        if key and ages:
+        if not key:
+            continue
+        ages = [m.age for m in members if m.age is not None]
+        if ages:
+            lo_a, hi_a = min(ages), max(ages)
+            if lo_a == hi_a and lo_a < 85:
+                continue
             for w in widths:
                 b = consistent_band(ages, w)
                 if b:

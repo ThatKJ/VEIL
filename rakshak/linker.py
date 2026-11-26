@@ -27,10 +27,49 @@ def _strip_fused_suffix(tl: str) -> str:
 
 
 _ES: frozenset = frozenset()
+_ET: tuple = ()
+_GENDER_FS = {"M": frozenset(("M",)), "F": frozenset(("F",))}
+_AGE_FS = {i: frozenset((i,)) for i in range(125)}
+_YEAR_FS = {y: frozenset((y,)) for y in range(1880, 2045)}
 _RX_INIT_RUN = re.compile(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?")
 _RX_INIT_CHR = re.compile(r"[A-Za-z]")
 _RX_NON_INDIC = re.compile(r"[^0-9a-z\u0B00-\u0DFF]")
 _RX_VILL_SPLIT = re.compile(r"[\s,._\-]+")
+
+
+def _uniq_tup(items) -> tuple:
+    seen: list = []
+    for x in items:
+        if x and x not in seen:
+            seen.append(x)
+    return tuple(seen)
+
+
+def _merge_coll(a, b):
+    if not b:
+        return a
+    if not a:
+        return b
+    if isinstance(a, set):
+        return a | (b if isinstance(b, (set, frozenset)) else set(b))
+    if isinstance(b, set):
+        return set(a) | b
+    if len(a) + len(b) <= 6:
+        out = list(a)
+        for x in b:
+            if x not in out:
+                out.append(x)
+        return tuple(out)
+    return set(a) | set(b)
+
+
+def _has_overlap(a, b) -> bool:
+    if not a or not b:
+        return False
+    if len(a) == 1 and len(b) == 1 and not isinstance(a, (set, frozenset)) and not isinstance(b, (set, frozenset)):
+        return a[0] == b[0]
+    sa = a if isinstance(a, (set, frozenset)) else set(a)
+    return any(x in sa for x in b)
 
 
 def name_keys(tokens: list[str]) -> tuple[str, ...]:
@@ -78,63 +117,84 @@ def _vill_key(v: str) -> str:
 
 
 class Cluster:
-    __slots__ = ("members", "names", "given", "rels", "dobs", "dob_yrs", "genders", "ages", "byears", "villages", "ids")
+    __slots__ = ("size", "names", "rels", "dobs", "dob_yrs", "genders", "ages", "byears", "villages", "ids")
 
-    def __init__(self, idx: int, ev: dict):
-        self.members = [idx]
-        if ev["names"]:
-            self.names = {k for k in (name_keys(n) for n in ev["names"]) if k} or _ES
-            self.given = {k[0] for k in self.names} if self.names else _ES
-        else:
-            self.names = _ES
-            self.given = _ES
-        self.rels = ({k for k in (name_keys(n) for n in ev["rel"]) if k} or _ES) if ev["rel"] else _ES
-        dob = ev["dob"]
-        if dob:
-            self.dobs = {dob}
-            self.dob_yrs = {int(dob[:4])} if (len(dob) >= 4 and dob[:4].isdigit()) else _ES
-        else:
-            self.dobs = _ES
-            self.dob_yrs = _ES
-        self.genders = {ev["gender"]} if ev["gender"] else _ES
-        age = ev["age"]
-        if age is not None:
-            self.ages = {age}
+    def __init__(self, idx: int, ev):
+        self.size = 1
+        if hasattr(ev, "_r"):
+            ev = ev._r
+        if isinstance(ev, dict):
+            ev_names = ev["names"]
+            ev_rel = ev["rel"]
+            dob = ev["dob"]
+            g = ev["gender"]
+            age = ev["age"]
             dt_yr = ev.get("date")
-            self.byears = {dt_yr - age} if isinstance(dt_yr, int) and dt_yr >= 2020 else _ES
+            vill = ev.get("village")
+            ev_ids = ev["ids"]
+            ev_phones = ev["phones"]
+        else:
+            ev_names = ev.names
+            ev_rel = ev.rel
+            dob = ev.dob
+            g = ev.gender
+            age = ev.age
+            dt_yr = ev.date
+            vill = ev.village
+            ev_ids = ev.ids
+            ev_phones = ev.phones
+        if ev_names:
+            self.names = _uniq_tup(name_keys(n) for n in ev_names)
+        else:
+            self.names = _ET
+        self.rels = _uniq_tup(name_keys(n) for n in ev_rel) if ev_rel else _ET
+        if dob:
+            self.dobs = (dob,)
+            if len(dob) >= 4 and dob[:4].isdigit():
+                yr = int(dob[:4])
+                self.dob_yrs = _YEAR_FS.get(yr) or frozenset((yr,))
+            else:
+                self.dob_yrs = _ES
+        else:
+            self.dobs = _ET
+            self.dob_yrs = _ES
+        self.genders = (_GENDER_FS.get(g) or frozenset((g,))) if g else _ES
+        if age is not None:
+            self.ages = _AGE_FS.get(age) or frozenset((age,))
+            if isinstance(dt_yr, int) and dt_yr >= 2020:
+                by = dt_yr - age
+                self.byears = _YEAR_FS.get(by) or frozenset((by,))
+            else:
+                self.byears = _ES
         else:
             self.ages = _ES
             self.byears = _ES
-        self.villages = {_vill_key(ev["village"])} if ev.get("village") else _ES
-        if ev["ids"] or ev["phones"]:
-            s = set(ev["ids"])
-            for p in ev["phones"]:
-                s.add("P:" + p)
-            self.ids = s
+        self.villages = (_vill_key(vill),) if vill else _ET
+        if ev_ids or ev_phones:
+            s: list[str] = list(ev_ids)
+            for p in ev_phones:
+                ps = "P:" + p
+                if ps not in s:
+                    s.append(ps)
+            self.ids = tuple(s) if len(s) <= 6 else set(s)
         else:
-            self.ids = _ES
+            self.ids = _ET
 
     def absorb(self, o: "Cluster"):
-        self.members += o.members
-        if o.names:
-            self.names = (set(self.names) if self.names is _ES else self.names) | o.names
-            self.given = (set(self.given) if self.given is _ES else self.given) | o.given
-        if o.rels:
-            self.rels = (set(self.rels) if self.rels is _ES else self.rels) | o.rels
-        if o.dobs:
-            self.dobs = (set(self.dobs) if self.dobs is _ES else self.dobs) | o.dobs
+        self.size += o.size
+        self.names = _merge_coll(self.names, o.names)
+        self.rels = _merge_coll(self.rels, o.rels)
+        self.dobs = _merge_coll(self.dobs, o.dobs)
         if o.dob_yrs:
-            self.dob_yrs = (set(self.dob_yrs) if self.dob_yrs is _ES else self.dob_yrs) | o.dob_yrs
-        if o.genders:
-            self.genders = (set(self.genders) if self.genders is _ES else self.genders) | o.genders
-        if o.ages:
-            self.ages = (set(self.ages) if self.ages is _ES else self.ages) | o.ages
-        if o.byears:
-            self.byears = (set(self.byears) if self.byears is _ES else self.byears) | o.byears
-        if o.villages:
-            self.villages = (set(self.villages) if self.villages is _ES else self.villages) | o.villages
-        if o.ids:
-            self.ids = (set(self.ids) if self.ids is _ES else self.ids) | o.ids
+            self.dob_yrs = (set(self.dob_yrs) if self.dob_yrs is _ES or isinstance(self.dob_yrs, frozenset) else self.dob_yrs) | o.dob_yrs
+        if o.genders and o.genders != self.genders:
+            self.genders = (set(self.genders) if self.genders is _ES or isinstance(self.genders, frozenset) else self.genders) | o.genders
+        if o.ages and o.ages != self.ages:
+            self.ages = (set(self.ages) if self.ages is _ES or isinstance(self.ages, frozenset) else self.ages) | o.ages
+        if o.byears and o.byears != self.byears:
+            self.byears = (set(self.byears) if self.byears is _ES or isinstance(self.byears, frozenset) else self.byears) | o.byears
+        self.villages = _merge_coll(self.villages, o.villages)
+        self.ids = _merge_coll(self.ids, o.ids)
 
 
 def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
@@ -201,14 +261,16 @@ def _name_compatible(a: Cluster, b: Cluster) -> bool:
     return False
 
 
-def _rel_match(ra: set[tuple[str, ...]], rb: set[tuple[str, ...]]) -> int:
+def _rel_match(ra, rb) -> int:
     """Return 2 for full multi-token relative match, 1 for 1-token-vs-full given-name match, 0 otherwise."""
     if not ra or not rb:
         return 0
-    if ra & rb:
-        if any(len(x) >= 2 for x in (ra & rb)):
+    sa = ra if isinstance(ra, (set, frozenset)) else set(ra)
+    common = [x for x in rb if x in sa]
+    if common:
+        if any(len(x) >= 2 for x in common):
             return 2
-        if any(len(x) == 1 and len(x[0]) >= 3 for x in (ra & rb)):
+        if any(len(x) == 1 and len(x[0]) >= 3 for x in common):
             return 1
         return 0
     for x in ra:
@@ -235,9 +297,9 @@ def _ages_ok(a: Cluster, b: Cluster) -> bool:
 
 
 def compatible(a: Cluster, b: Cluster) -> bool:
-    if len(a.genders | b.genders) > 1:
+    if a.genders and b.genders and a.genders != b.genders and len(a.genders | b.genders) > 1:
         return False
-    if a.dobs and b.dobs and not (a.dobs & b.dobs):
+    if a.dobs and b.dobs and not _has_overlap(a.dobs, b.dobs):
         return False
     if not _ages_ok(a, b):
         return False
@@ -284,7 +346,7 @@ class Linker:
         a, b = self.cl[ri], self.cl[rj]
         if not compatible(a, b):
             return False
-        if len(a.members) < len(b.members) or (len(a.members) == len(b.members) and rj < ri):
+        if a.size < b.size or (a.size == b.size and rj < ri):
             ri, rj, a, b = rj, ri, b, a
         a.absorb(b)
         self.parent[rj] = ri
@@ -298,7 +360,11 @@ class Linker:
         by_id: dict[str, int | list[int]] = {}
         by_ph: dict[str, int | list[int]] = {}
         for i, e in enumerate(self.ev):
-            for x in e["ids"]:
+            if isinstance(e, dict):
+                e_ids, e_phones = e["ids"], e["phones"]
+            else:
+                e_ids, e_phones = e.ids, e.phones
+            for x in e_ids:
                 cur = by_id.get(x)
                 if cur is None:
                     by_id[x] = i
@@ -306,7 +372,7 @@ class Linker:
                     by_id[x] = [cur, i]
                 else:
                     cur.append(i)
-            for p in e["phones"]:
+            for p in e_phones:
                 cur = by_ph.get(p)
                 if cur is None:
                     by_ph[p] = i
@@ -315,10 +381,16 @@ class Linker:
                 else:
                     cur.append(i)
             if self._release:
-                e["names"] = ()
-                e["rel"] = ()
-                e["village"] = None
-                e["date"] = None
+                if isinstance(e, dict):
+                    e["names"] = ()
+                    e["rel"] = ()
+                    e["village"] = None
+                    e["date"] = None
+                else:
+                    e.names = _ET
+                    e.rel = _ET
+                    e.village = None
+                    e.date = None
         self.ev = []
 
         id_order = sorted(
@@ -466,8 +538,8 @@ class Linker:
                         if not shared:
                             continue
                         rel_m = _rel_match(c.rels, d.rels)
-                        dob_m = bool(c.dobs & d.dobs)
-                        vill_m = (bool(c.villages & d.villages) and c.ages and d.ages and _ages_ok(c, d))
+                        dob_m = _has_overlap(c.dobs, d.dobs)
+                        vill_m = (_has_overlap(c.villages, d.villages) and c.ages and d.ages and _ages_ok(c, d))
                         if not (dob_m or rel_m or vill_m):
                             continue
                         if not compatible(c, d):

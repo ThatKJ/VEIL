@@ -222,7 +222,7 @@ def _mk(y: int, m: int, d: int) -> dt.date | None:
 
 def shift_dates_in(text: str, days: int, order: str, counter: list | None = None, wrap=None) -> str:
     """Shift every recognisable date in text by `days`, keeping each date's own format."""
-    if not days:
+    if not days or not text or not any(c.isdigit() for c in text):
         return text
     delta = dt.timedelta(days=days)
     w = wrap or (lambda x: x)
@@ -340,7 +340,8 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         n = d + delta
         return w(f"{n.day} {_HI_NAMES[n.month]} {n.year}")
 
-    text = RX_HID.sub(hid, text)
+    if not text.isascii():
+        text = RX_HID.sub(hid, text)
     text = RX_ISO.sub(iso, text)
     text = RX_ISO8.sub(iso8, text)
     text = RX_DMY8.sub(dmy8, text)
@@ -558,16 +559,153 @@ class Harvest:
 
 
 # ============================================================== records & evidence
-class Rec:
-    __slots__ = ("file", "loc", "ev", "pid", "key", "is_patient")
+_ET: tuple = ()
+_EF: frozenset = frozenset()
 
-    def __init__(self, file: str, loc: str):
-        self.file, self.loc = file, loc
-        self.ev = {"names": [], "rel": [], "ids": set(), "phones": set(), "dob": None, "age": None,
-                   "gender": None, "village": None, "date": None}
+
+class _EvProxy:
+    """Lazy dict-like adapter over compact Rec slots (for UI/test inspection without 1M-row dicts)."""
+    __slots__ = ("_r",)
+
+    def __init__(self, r: "Rec"):
+        self._r = r
+
+    def __getitem__(self, k: str):
+        r = self._r
+        if k == "names":
+            return r.names
+        if k == "rel":
+            return r.rel
+        if k == "ids":
+            if not isinstance(r.ids, set):
+                r.ids = set(r.ids) if r.ids else set()
+            return r.ids
+        if k == "phones":
+            if not isinstance(r.phones, set):
+                r.phones = set(r.phones) if r.phones else set()
+            return r.phones
+        if k == "conds":
+            if r.conds is None:
+                raise KeyError(k)
+            return r.conds
+        if hasattr(r, k):
+            return getattr(r, k)
+        raise KeyError(k)
+
+    def __setitem__(self, k: str, v):
+        setattr(self._r, k, v)
+
+    def get(self, k: str, default=None):
+        if k == "conds":
+            return default if self._r.conds is None else self._r.conds
+        if k == "district":
+            return default if self._r.district is None else self._r.district
+        return getattr(self._r, k, default)
+
+    def setdefault(self, k: str, default=None):
+        cur = self.get(k, None)
+        if cur is None:
+            setattr(self._r, k, default)
+            return default
+        return cur
+
+
+class Rec:
+    __slots__ = ("file", "_loc", "names", "rel", "ids", "phones", "dob", "age", "gender",
+                 "village", "district", "date", "conds", "pid", "key", "is_patient")
+
+    def __init__(self, file: str, loc: str | int):
+        self.file, self._loc = file, loc
+        self.names = _ET
+        self.rel = _ET
+        self.ids = _EF
+        self.phones = _EF
+        self.dob = None
+        self.age = None
+        self.gender = None
+        self.village = None
+        self.district = None
+        self.date = None
+        self.conds = None
         self.pid = None
         self.key = None
         self.is_patient = False
+
+    @property
+    def loc(self) -> str:
+        return f"row:{self._loc}" if isinstance(self._loc, int) else self._loc
+
+    @property
+    def ev(self) -> _EvProxy:
+        return _EvProxy(self)
+
+    def add_name_toks(self, toks) -> None:
+        t = tuple(toks)
+        if t:
+            self.names = (t,) if not self.names else (self.names + (t,))
+
+    def add_rel_toks(self, toks) -> None:
+        t = tuple(toks)
+        if t:
+            self.rel = (t,) if not self.rel else (self.rel + (t,))
+
+    def add_id(self, val: str) -> None:
+        cur = self.ids
+        if not cur:
+            self.ids = (val,)
+        elif isinstance(cur, set):
+            cur.add(val)
+        elif val not in cur:
+            if len(cur) < 4:
+                self.ids = cur + (val,)
+            else:
+                s = set(cur)
+                s.add(val)
+                self.ids = s
+
+    def discard_id(self, val: str) -> None:
+        cur = self.ids
+        if not cur:
+            return
+        if isinstance(cur, set):
+            cur.discard(val)
+        elif val in cur:
+            self.ids = tuple(x for x in cur if x != val) or _EF
+
+    def add_phone(self, val: str) -> None:
+        cur = self.phones
+        if not cur:
+            self.phones = (val,)
+        elif isinstance(cur, set):
+            cur.add(val)
+        elif val not in cur:
+            if len(cur) < 4:
+                self.phones = cur + (val,)
+            else:
+                s = set(cur)
+                s.add(val)
+                self.phones = s
+
+    def discard_phone(self, val: str) -> None:
+        cur = self.phones
+        if not cur:
+            return
+        if isinstance(cur, set):
+            cur.discard(val)
+        elif val in cur:
+            self.phones = tuple(x for x in cur if x != val) or _EF
+
+    def release_ev(self) -> None:
+        self.names = _ET
+        self.rel = _ET
+        self.ids = _EF
+        self.phones = _EF
+        self.dob = None
+        self.age = None
+        self.gender = None
+        self.village = None
+        self.date = None
+        self.conds = None
 
 
 def gender_of(v) -> str | None:

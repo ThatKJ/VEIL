@@ -1,6 +1,6 @@
 # VEIL (`rakshak` package): Verifiable Entity Integrity Layer
 
-**Team:** **The Aevos** · **Track:** Track 3 — Secret Wards · **Repository:** https://github.com/ThatKJ/VEIL
+**Team:** **The Aevos** (Leader: **Ishan Kumar**; Members: **Kirtan**, **Aryan Verma**, **Ukani Het**) · **Track:** Track 3 — Secret Wards · **Repository:** https://github.com/ThatKJ/VEIL
 
 **Hide the identity. Preserve the medicine.** VEIL (internal Python package `rakshak`) sanitises messy multi-hospital exports in English, Hindi (Devanagari), Hinglish, and Nagari/Eastern/Western Indic scripts (CSV/TSV, nested JSON, arrays-of-arrays, JSON Lines, FHIR R4 Bundles, fixed-width `.txt`, free-text notes, broken files). It works **offline, on CPU only, with no LLMs or ML models**, using only the Python standard library. In one release it:
 

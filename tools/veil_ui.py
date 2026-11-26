@@ -62,6 +62,8 @@ AGE_BAND_PATTERN = re.compile(r"\b\d{1,2}-\d{2,3}\b")
 
 HISTORICAL_BENCHMARKS = {
     "team": "The Aevos",
+    "team_leader": "Ishan Kumar",
+    "team_members": ["Ishan Kumar", "Kirtan", "Aryan Verma", "Ukani Het"],
     "checkpoint": "CHAMPION (main, built on frozen known-good-11 / 69530e8)",
     "disclaimer": (
         "Measured offline using the local synthetic harness and re-implemented attacker "
@@ -411,8 +413,8 @@ def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[di
             toks_b = {t for nk in cb.names for t in nk if len(t) >= 2}
             shared_name_toks = bool(toks_a & toks_b)
             shared_surname = any(nk_a and nk_b and nk_a[-1] == nk_b[-1] for nk_a in ca.names for nk_b in cb.names)
-            shared_vill = bool(ca.villages & cb.villages)
-            shared_id_raw = bool(ca.ids & cb.ids)
+            shared_vill = LNK._has_overlap(ca.villages, cb.villages)
+            shared_id_raw = LNK._has_overlap(ca.ids, cb.ids)
             is_comp = LNK.compatible(ca, cb)
 
             if not (shared_name_toks or shared_surname or shared_vill or shared_id_raw):
@@ -421,7 +423,7 @@ def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[di
             veto_reasons = []
             if len(ca.genders | cb.genders) > 1:
                 veto_reasons.append("Gender mismatch")
-            if ca.dobs and cb.dobs and not (ca.dobs & cb.dobs):
+            if ca.dobs and cb.dobs and not LNK._has_overlap(ca.dobs, cb.dobs):
                 veto_reasons.append("Contradicting DOB")
             if not LNK._ages_ok(ca, cb):
                 if ca.ages and cb.ages:
