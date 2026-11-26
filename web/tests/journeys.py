@@ -27,6 +27,18 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS: list[tuple[str, bool, str]] = []
 
 
+
+def _wait_js(page, predicate, timeout=30000):
+    """Bounded polling of the same predicate via page.evaluate (DevTools evaluation), so the tests do not
+    require 'unsafe-eval' in the production Content-Security-Policy. Same predicate, same timeout."""
+    deadline = time.monotonic() + timeout / 1000.0
+    while True:
+        if page.evaluate(predicate):
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out after {timeout} ms waiting for: {predicate}")
+        page.wait_for_timeout(100)
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, bool(ok), detail))
     print(f"{'PASS' if ok else 'FAIL'}  {name}{('  · ' + detail) if detail else ''}", flush=True)
@@ -97,7 +109,7 @@ def main() -> int:
                     page.wait_for_timeout(600)
                     page.screenshot(path=str(shots / "empty-state.png"), full_page=True)
                 page.click("#btn-empty-demo")
-                page.wait_for_function("document.getElementById('status-pill').textContent.includes('Verified PASS') || document.getElementById('status-pill').textContent.includes('Sanitized Ready')", timeout=60000)
+                _wait_js(page, "document.getElementById('status-pill').textContent.includes('Verified PASS') || document.getElementById('status-pill').textContent.includes('Sanitized Ready')", timeout=60000)
                 check("A demo run reaches a release state", True, page.text_content("#status-pill"))
                 check("A file-count badge shows release size", page.text_content("#nav-file-count").strip().isdigit())
                 with page.expect_download() as dl:
@@ -109,7 +121,7 @@ def main() -> int:
                 # ---- Journey E (part 1): run arena on the demo
                 page.click('button[data-view="arena"]')
                 page.click("#btn-run-arena")
-                page.wait_for_function("document.getElementById('arena-status-badge').textContent === 'Measured Live'", timeout=60000)
+                _wait_js(page, "document.getElementById('arena-status-badge').textContent === 'Measured Live'", timeout=60000)
                 check("E arena measured on demo", "VEIL Adaptive" in page.text_content("#arena-table"))
 
                 # ---- Journey F: invalid uploads
@@ -138,10 +150,10 @@ def main() -> int:
                 page.set_input_files("#file-input", [str(big_csv)])
                 t0 = time.time()
                 page.click("#btn-run-uploaded")
-                page.wait_for_function("['Queued','Running…','Validating…'].includes(document.getElementById('status-pill').textContent) || document.getElementById('status-pill').textContent.includes('Sanitized Ready')", timeout=60000)
+                _wait_js(page, "['Queued','Running…','Validating…'].includes(document.getElementById('status-pill').textContent) || document.getElementById('status-pill').textContent.includes('Sanitized Ready')", timeout=60000)
                 saved = page.evaluate("sessionStorage.getItem('veil_active_job_id')")
                 page.reload(wait_until="domcontentloaded")
-                page.wait_for_function(f"document.getElementById('runner-log').textContent.includes('{a.rows} records')", timeout=180000)
+                _wait_js(page, f"document.getElementById('runner-log').textContent.includes('{a.rows} records')", timeout=180000)
                 ready_s = round(time.time() - t0, 2)
                 check("C/F reload mid-job resumes and completes", True, f"{a.rows} rows ready in {ready_s}s (job {saved or 'already done'})")
                 check("C status is honest before audit", "Sanitized Ready" in page.text_content("#status-pill"), page.text_content("#status-pill"))
@@ -151,20 +163,20 @@ def main() -> int:
                 check("E arena reset for new dataset", page.text_content("#arena-status-badge") == "On-Demand")
 
                 page.click('button[data-view="inspector"]')
-                page.wait_for_function("document.getElementById('diff-output-pre').textContent.includes('PSN-')", timeout=20000)
+                _wait_js(page, "document.getElementById('diff-output-pre').textContent.includes('PSN-')", timeout=20000)
                 trunc_visible = page.is_visible("#diff-trunc-note")
                 check("C inspector shows bounded preview", trunc_visible, "truncation note visible")
                 page.click('button[data-view="graph"]')
                 t1 = time.time()
                 page.click("#btn-run-identity")
-                page.wait_for_function(f"document.getElementById('graph-subset-badge').textContent.includes('of {a.rows} clusters')", timeout=120000)
+                _wait_js(page, f"document.getElementById('graph-subset-badge').textContent.includes('of {a.rows} clusters')", timeout=120000)
                 nodes = page.evaluate("document.querySelectorAll('#identity-svg *').length")
                 check("C bounded identity graph", nodes < 400, f"{round(time.time() - t1, 2)}s, {nodes} SVG nodes, {page.text_content('#graph-subset-badge')}")
                 page.click('button[data-view="passport"]')
                 check("C passport pending before audit", "VERIFICATION PENDING" in page.text_content("#passport-banner"))
                 t2 = time.time()
                 page.click("#btn-run-passport")
-                page.wait_for_function("!document.getElementById('btn-run-passport').disabled", timeout=180000)
+                _wait_js(page, "!document.getElementById('btn-run-passport').disabled", timeout=180000)
                 check("C passport verdict shown", True, f"{round(time.time() - t2, 2)}s → {page.text_content('#status-pill')}")
                 check("C pillars show the full denominator", f"{a.rows}/{a.rows}" in page.text_content("#passport-pillars"))
                 with page.expect_download(timeout=120000) as dl:
@@ -175,11 +187,11 @@ def main() -> int:
 
                 # ---- Journey D: defect → detect → repair → reverify
                 page.click("#btn-corrupt-demo")
-                page.wait_for_function("document.getElementById('status-pill').textContent === 'Defect Caught!'", timeout=120000)
+                _wait_js(page, "document.getElementById('status-pill').textContent === 'Defect Caught!'", timeout=120000)
                 check("D defect caught and labelled as demo copy", "SYNTHETIC DEFECT CAUGHT" in page.text_content("#passport-banner") and page.is_visible("#sheet-defect"))
                 check("D defect export links point to the defect variant", "variant=corrupt" in (page.get_attribute("#btn-export-passport-html", "href") or ""))
                 page.click("#btn-repair-demo")
-                page.wait_for_function("document.getElementById('status-pill').textContent !== 'Repairing Release...' && document.getElementById('status-pill').textContent !== 'Defect Caught!'", timeout=180000)
+                _wait_js(page, "document.getElementById('status-pill').textContent !== 'Repairing Release...' && document.getElementById('status-pill').textContent !== 'Defect Caught!'", timeout=180000)
                 check("D repair reverifies", page.is_hidden("#sheet-defect"), page.text_content("#status-pill"))
                 if shots:
                     page.wait_for_timeout(1200)

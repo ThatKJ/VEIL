@@ -70,8 +70,14 @@ NON_PERSON = re.compile(
 )
 INSTITUTIONAL_PHRASE = re.compile(
     r"(?i)\b(?:hospital|clinic|sadan|sansthan|charitable|multispeciality|super\s*speciality|"
-    r"medical\s+college|trust|foundation|pathology|diagnostics?|laboratory|dispensary)\b"
+    r"medical\s+college|trust|foundation|pathology|diagnostics?|laboratory|dispensary|"
+    r"aspatal|aspataal|sehat\s+kendra|swasthya\s+kendra|arogya\s+kendra|chikitsalaya|aushadhalaya|aspatre|aashupathri|aspathri)\b"
 )
+# Clinician / staff titles (patients do not carry these); shared by harvest and hit counting.
+_STAFF_TITLE = r"(?:dr|sr|sis|sister|sn|s/n|staff\s+nurse|nurse|anm|gnm|n/o|deo|doctor)"
+_STAFF_PREFIX = re.compile(rf"(?i)\s*{_STAFF_TITLE}\.?\s")
+# A value that is a clinical expression (dose/unit) is not a personal identifier.
+_CLINICAL_VALUE = re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg|ml|g|iu|units?|mmhg|mg/dl|g/dl|mmol/l|%)\b")
 _DOB_KEY = re.compile(r"(?i)^(?:birthDate|dob|date_of_birth|birthdate|janam|born|deathDate|deceasedDateTime)$")
 _DOB_LINE = re.compile(r"(?im)^.*\b(?:dob|date\s+of\s+birth|birth\s*date|janam|जन्म\s*तिथि)\b.*$")
 ID_KEY = re.compile(r"(?i)(?:^|_|\b)(?:name|naam|patient|uhid|mrn|aadha?a?r|abha|mobile|phone|contact|email)(?:$|_|\b)")
@@ -90,6 +96,16 @@ def decode(raw: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return raw.decode("utf-8", "replace")
+
+
+_STAFF_CTX = re.compile(rf"(?:^|[^a-z]){_STAFF_TITLE}\.?\s+(?:[^\W\d_]+\s+){{0,2}}$")
+
+
+def _only_in_staff_context(value: str, low: str) -> bool:
+    """True when every occurrence of a harvested value is directly preceded by a clinician/staff title
+    (e.g. 'dr. anand shukla'). A single bare occurrence still counts as residue."""
+    occ = [m.start() for m in re.finditer(re.escape(value), low)]
+    return bool(occ) and all(_STAFF_CTX.search(low[max(0, i - 40):i]) for i in occ)
 
 
 def with_decoded_extras(text: str) -> str:
@@ -145,6 +161,8 @@ def _harvest_independent_identifiers(inp: Path) -> tuple[set[str], set[str]]:
         sv = norm(raw_s)
         if sv in ("patient_name", "patient", "relative", "unknown"):
             return
+        if _CLINICAL_VALUE.search(raw_s) and not _has_strong_id(raw_s):
+            return
         if INSTITUTIONAL_PHRASE.search(sv) and not _has_strong_id(raw_s):
             inst_vals.add(sv)
             return
@@ -161,7 +179,7 @@ def _harvest_independent_identifiers(inp: Path) -> tuple[set[str], set[str]]:
         elif isinstance(o, list):
             for x in o:
                 walk(x, key, ctx)
-        elif ID_KEY.search(str(key)) and not re.match(r"(?i)\s*(?:dr|sr|sis|n/o)\.?\s", str(o)):
+        elif ID_KEY.search(str(key)) and not _STAFF_PREFIX.match(str(o)):
             add(o, ctx)
 
     for p in sorted(inp.rglob("*")):
@@ -195,7 +213,7 @@ def _harvest_independent_identifiers(inp: Path) -> tuple[set[str], set[str]]:
                     for i, h in cols:
                         if i < len(r):
                             val = r[i].strip()
-                            if val and not re.match(r"(?i)\s*(?:dr|sr|sis|n/o)\.?\s", val):
+                            if val and not _STAFF_PREFIX.match(val):
                                 add(val, h)
     person = {v for v in vals if not v.isdigit() or len(v) >= 6}
     return person, inst_vals
@@ -614,7 +632,7 @@ def audit(inp: Path, out: Path) -> dict:
                 pat[label] += n
                 resid_files[name] += n
         low = norm(tx)
-        hits = len(ident_idx.find_hits(low))
+        hits = sum(1 for v in ident_idx.find_hits(low) if not _only_in_staff_context(v, low))
         if hits:
             pat["input identity value"] += hits
             resid_files[name] += hits

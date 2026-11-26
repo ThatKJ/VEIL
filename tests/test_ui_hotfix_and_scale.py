@@ -24,6 +24,18 @@ sys.path.insert(0, str(ROOT / "tools"))
 import veil_ui as UI  # noqa: E402
 
 
+
+def _wait_js(page, predicate, timeout=30000):
+    """Bounded polling of the same predicate via page.evaluate (DevTools evaluation), so the tests do not
+    require 'unsafe-eval' in the production Content-Security-Policy. Same predicate, same timeout."""
+    deadline = time.monotonic() + timeout / 1000.0
+    while True:
+        if page.evaluate(predicate):
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out after {timeout} ms waiting for: {predicate}")
+        page.wait_for_timeout(100)
+
 def _make_csv_bytes(n_rows: int, repeated: bool = False, prefix: str = "UH") -> bytes:
     lines = ["uhid,patient_name,age,gender,mobile,village,district,pin,diagnosis"]
     for i in range(n_rows):
@@ -321,7 +333,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     page.set_input_files("#file-input", b64_paths)
                     self.assertIn("64 / 64 files", page.text_content("#staged-stats-text"))
                     page.click("#btn-run-uploaded")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('runner-log').textContent.includes('64/64 files sanitized')",
                         timeout=30000,
                     )
@@ -332,7 +344,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     self.assertIn("1 / 64 files", page.text_content("#staged-stats-text"))
                     t_ui0 = time.monotonic()
                     page.click("#btn-run-uploaded")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('status-pill').textContent.includes('Sanitized Ready')",
                         timeout=30000,
                     )
@@ -346,7 +358,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
 
                     # 3. Verify lazy Diff Inspector works smoothly on 5,000 rows
                     page.click('button[data-view="inspector"]')
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('diff-output-pre').textContent.includes('PSN-')",
                         timeout=10000,
                     )
@@ -355,7 +367,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     page.click('button[data-view="graph"]')
                     t_g0 = time.monotonic()
                     page.click("#btn-run-identity")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('graph-subset-badge').textContent.includes('of 5000 clusters')",
                         timeout=20000,
                     )
@@ -365,7 +377,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     page.click('button[data-view="passport"]')
                     self.assertIn("VERIFICATION PENDING", page.text_content("#passport-banner"))
                     page.click("#btn-run-passport")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('status-pill').textContent === 'Verified PASS'",
                         timeout=30000,
                     )
@@ -376,7 +388,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     page.click('button[data-view="arena"]')
                     self.assertIn("On-Demand", page.text_content("#arena-status-badge"))
                     page.click("#btn-run-arena")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('arena-status-badge').textContent === 'Measured Live'",
                         timeout=45000,
                     )
@@ -384,13 +396,13 @@ class UiHotfixAndScaleTests(unittest.TestCase):
 
                     page.click('button[data-view="passport"]')
                     page.click("#btn-corrupt-demo")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('status-pill').textContent === 'Defect Caught!'",
                         timeout=30000,
                     )
                     self.assertIn("SYNTHETIC DEFECT CAUGHT", page.text_content("#passport-banner"))
                     page.click("#btn-repair-demo")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('status-pill').textContent === 'Verified PASS'",
                         timeout=30000,
                     )
@@ -403,7 +415,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     page.set_input_files("#file-input", [str(csv_10k)])
                     t_10k0 = time.monotonic()
                     page.click("#btn-run-uploaded")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('runner-log').textContent.includes('10000 records')",
                         timeout=30000,
                     )
@@ -418,7 +430,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
 
                     page.click('button[data-view="passport"]')
                     page.click("#btn-run-passport")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "document.getElementById('status-pill').textContent === 'Verified PASS'",
                         timeout=30000,
                     )
@@ -682,7 +694,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     self.assertIn("ward_note.txt", staged_text)
 
                     page.click("#btn-run-uploaded")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => document.querySelector('#status-pill')?.textContent.includes('Sanitized Ready')",
                         timeout=30000,
                     )
@@ -690,21 +702,21 @@ class UiHotfixAndScaleTests(unittest.TestCase):
 
                     # Visit every remaining tab & exercise on-demand controls
                     page.click('button[data-view="inspector"]')
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#diff-output-pre')?.textContent || '').includes('PSN-')",
                         timeout=10000,
                     )
 
                     page.click('button[data-view="graph"]')
                     page.click("#btn-run-identity")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#graph-subset-badge')?.textContent || '').includes('clusters')",
                         timeout=15000,
                     )
 
                     page.click('button[data-view="arena"]')
                     page.click("#btn-run-arena")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#arena-status-badge')?.textContent || '') === 'Measured Live'",
                         timeout=30000,
                     )
@@ -715,21 +727,21 @@ class UiHotfixAndScaleTests(unittest.TestCase):
 
                     page.click('button[data-view="passport"]')
                     page.click("#btn-run-passport")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#passport-banner')?.textContent || '').includes('RELEASE AUDIT PASSED')",
                         timeout=15000,
                     )
 
                     # Inject defect -> export link gets ?variant=corrupt, repair clears it
                     page.click("#btn-corrupt-demo")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#passport-banner')?.textContent || '').includes('SYNTHETIC DEFECT CAUGHT')",
                         timeout=10000,
                     )
                     self.assertIn("?variant=corrupt", page.get_attribute("#btn-export-passport-html", "href") or "")
 
                     page.click("#btn-repair-demo")
-                    page.wait_for_function(
+                    _wait_js(page, 
                         "() => (document.querySelector('#passport-banner')?.textContent || '').includes('RELEASE AUDIT PASSED')",
                         timeout=20000,
                     )

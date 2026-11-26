@@ -1424,9 +1424,8 @@ def _build_csp() -> str:
     if idx.is_file():
         for m in re.finditer(r"<script>(.*?)</script>", idx.read_text(encoding="utf-8"), re.S):
             hashes.append("'sha256-" + base64.b64encode(hashlib.sha256(m.group(1).encode("utf-8")).digest()).decode() + "'")
-    # 'unsafe-eval' only for browser test automation (Playwright string predicates); VEIL never calls eval and
-    # inline scripts stay blocked except the hashed appearance bootstrap.
-    return ("default-src 'self'; script-src 'self' 'unsafe-eval' " + " ".join(hashes) + "; style-src 'self' 'unsafe-inline'; "
+    # No 'unsafe-inline'/'unsafe-eval' for scripts: only same-origin app.js plus the hashed appearance bootstrap.
+    return ("default-src 'self'; script-src 'self' " + " ".join(hashes) + "; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 
 
@@ -2318,10 +2317,45 @@ class ReusableThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPS
     daemon_threads = True
 
 
+_OWNER_MARKER = ".veil_owner"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _reap_abandoned_workdirs(tmp_root: Path) -> int:
+    """Remove VEIL UI workdirs left by a killed/crashed server. Only directories that are positively ours are
+    touched: 'veil_ui_' prefix, owned by this user, containing our owner marker whose PID is no longer running.
+    Deletion is cleanup, not secure erasure."""
+    removed = 0
+    for d in tmp_root.glob("veil_ui_*"):
+        try:
+            marker = d / _OWNER_MARKER
+            if not d.is_dir() or d.is_symlink() or not marker.is_file() or d.stat().st_uid != os.getuid():
+                continue
+            pid = int(json.loads(marker.read_text(encoding="utf-8")).get("pid", 0))
+            if pid > 0 and not _pid_alive(pid):
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        except (OSError, ValueError, TypeError):
+            continue
+    return removed
+
+
 def create_server(host: str = "127.0.0.1", port: int = 8765, preload_demo: bool = False, workdir: Path | None = None):
+    if workdir is None:
+        _reap_abandoned_workdirs(Path(tempfile.gettempdir()))
     wd = workdir or Path(tempfile.mkdtemp(prefix="veil_ui_"))
     wd.mkdir(parents=True, exist_ok=True)
     if workdir is None:
+        (wd / _OWNER_MARKER).write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
         atexit.register(lambda: shutil.rmtree(wd, ignore_errors=True))
     state = ServerState(wd)
     if preload_demo and DEMO_DIR.is_dir():

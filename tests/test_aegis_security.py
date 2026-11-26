@@ -70,11 +70,31 @@ class TestUiHostAndOrigin(unittest.TestCase):
         st, _, h = self._req("GET", "/")
         self.assertEqual(h.get("X-Frame-Options"), "DENY")
         self.assertIn("frame-ancestors 'none'", h.get("Content-Security-Policy", ""))
-        self.assertNotIn("'unsafe-inline'", h["Content-Security-Policy"].split("script-src", 1)[1].split(";", 1)[0])  # inline scripts blocked
+        script_src = h["Content-Security-Policy"].split("script-src", 1)[1].split(";", 1)[0]
+        self.assertNotIn("'unsafe-inline'", script_src)
+        self.assertNotIn("'unsafe-eval'", script_src)
 
     def test_state_never_contains_secret(self):
         _, data, _ = self._req("GET", "/api/state")
         self.assertNotIn(UI.DEMO_SECRET.encode(), data)
+
+
+class TestAbandonedWorkdirReaper(unittest.TestCase):
+    def test_only_dead_owner_marked_veil_dirs_are_removed(self):
+        import os
+        root = Path(tempfile.mkdtemp(prefix="aegis_reap_"))
+        try:
+            dead, live, legacy, other = root / "veil_ui_dead", root / "veil_ui_live", root / "veil_ui_legacy", root / "other_dir"
+            for d in (dead, live, legacy, other):
+                (d / "job_x").mkdir(parents=True)
+            (dead / UI._OWNER_MARKER).write_text(json.dumps({"pid": 2 ** 22 + 12345}), encoding="utf-8")
+            (live / UI._OWNER_MARKER).write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+            (other / UI._OWNER_MARKER).write_text(json.dumps({"pid": 2 ** 22 + 12345}), encoding="utf-8")
+            self.assertEqual(UI._reap_abandoned_workdirs(root), 1)
+            self.assertFalse(dead.exists())
+            self.assertTrue(live.exists() and legacy.exists() and other.exists())
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 class TestDemoKeyIsolation(unittest.TestCase):
@@ -91,6 +111,30 @@ def _bundle(ref: str) -> dict:
         {"fullUrl": "urn:uuid:o1", "resource": {"resourceType": "Observation", "id": "o1", "subject": {"reference": ref},
                                                 "contained": [{"resourceType": "Device", "id": "d"}], "device": {"reference": "#d"}}},
     ]}
+
+
+class TestPassportContextPairs(unittest.TestCase):
+    """Same expression as legitimate clinical/institutional content (A) vs genuine synthetic patient PII (B)."""
+
+    def test_harvest_separates_staff_medication_institution_from_patient(self):
+        root = Path(tempfile.mkdtemp(prefix="aegis_pair_"))
+        try:
+            (root / "reg.csv").write_text(
+                "patient_name,attending_name,medication_name,hospital_name\n"
+                "Tusha Kuruba,SN Tusha Kuruba,Metformin 500 mg,Meham Sarvjanik Aspatal\n", encoding="utf-8")
+            vals, inst = VP._harvest_independent_identifiers(root)
+            self.assertIn("tusha kuruba", vals)                 # B: the patient is harvested
+            self.assertNotIn("sn tusha kuruba", vals)           # A: staff-titled entry is not a patient identity
+            self.assertNotIn("metformin 500 mg", vals)          # A: clinical expression
+            self.assertIn("meham sarvjanik aspatal", inst)      # A: institution
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_clinician_context_ignored_but_bare_patient_mention_counts(self):
+        self.assertTrue(VP._only_in_staff_context("tusha kuruba", VP.norm("Reviewed by SN Tusha Kuruba.")))
+        self.assertTrue(VP._only_in_staff_context("anand shukla", VP.norm("Seen by Dr. Anand Shukla.")))
+        self.assertFalse(VP._only_in_staff_context("tusha kuruba", VP.norm("Patient Tusha Kuruba admitted.")))
+        self.assertFalse(VP._only_in_staff_context("anand shukla", VP.norm("Dr. Anand Shukla saw patient Anand Shukla.")))
 
 
 class TestVerifierSensitivity(unittest.TestCase):
