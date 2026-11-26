@@ -725,6 +725,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t = RX_DEVA_VILLAGE.sub(dvill, t)
 
     def pin(m):
+        if not m.group(1) and re.search(r"\d[\d.,]*\s*-\s*$", m.string[max(0, m.start() - 16):m.start()]):
+            return m.group(0)          # upper bound of a numeric range (e.g. 150000-410000), not a PIN
         st["identifiers"] += 1
         g = 1 if m.group(1) else 3
         keep = ctx.rule is None or ctx.rule.pin != "drop"
