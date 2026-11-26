@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Protected baseline | `87aba54` (main when Atelier started, 2026-11-27 02:46 IST) |
-| Frontend branch / worktree | `design/veil-atelier` at `/Users/kirtan/Hackathons/DevForge/veil-atelier` |
+| Frontend branch / worktree | `design/veil-atelier` (separate local git worktree) |
 | Latest OMEGA main checked | `0697872` (includes `5f35fc7` UI/passport fixes) |
 | Files changed | `web/index.html`, `web/styles.css`, `web/app.js`, new `web/tests/journeys.py`, `docs/frontend/**` |
 | Backend files changed | **None** (`git diff 87aba54 -- . ':!web' ':!docs/frontend'` is empty) |
