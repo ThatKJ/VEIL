@@ -155,9 +155,9 @@ FIELD_RULES = [
     ("NAME", r"name|naam|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
              r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
-    ("AGE", r"age|umar|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
+    ("AGE", r"age|umar|umr|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
     ("VILLAGE", r"village|gaon|gaanv|gam|gram|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
-    ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना"),
+    ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno"),
     ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
@@ -193,8 +193,9 @@ NAME_LABEL = re.compile(
     rf"dardi(?:\s*nu\s*naam)?|naam|rogi\s*ka\s*naam|mareez|beneficiary|labharthi|name|nm\.?|"
     rf"नाम|नाँव|रुग्णाचे\s*नाव|रुग्ण\s*नाव|लाभार्थी|नाव|मरीज़?\s*(?:का|दा)\s*नाम|मरीज़?|रोगी\s*(?:का|दा)?\s*नाम|रोगी|ਨਾਮ|রোগী)\s*[:：=\-]+\s*")
 ADDRESS_LABEL = re.compile(
-    r"(?i)(?:^|(?<=[\s,;|(\[]))(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|"
-    r"patta|sarnamu|rihaish|thikana|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना)\s*[:：\-]+\s*")
+    r"(?i)(?:^|(?<=[\s,;|(\[]))(?:(?:address|addr\.?|residence|"
+    r"patta|sarnamu|rihaish|thikana|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना)\s*[:：\-]+\s*"
+    r"|(?:resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala)\s*[:：\-]*\s*(?=(?-i:[A-Z0-9#\u0900-\u097F])))")
 VILLAGE_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:vill(?:age)?\.?|gaon|gam|gram|ग्राम|गाँव|गांव|पिंड|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
 DOB_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*(?:tithi|tarikh))\s*[:：\-]+\s*")
 
