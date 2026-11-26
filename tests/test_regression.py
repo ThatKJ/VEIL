@@ -36,7 +36,7 @@ class RegressionTests(unittest.TestCase):
             (inp / "adt.txt").write_text(msg, encoding="utf-8", newline="")
             self._run_cli(inp, out)
             files = [p for p in (out / "sanitized").rglob("*") if p.is_file()]
-            text = files[0].read_text(encoding="utf-8")
+            text = files[0].read_bytes().decode("utf-8")     # keep HL7 \r segment separators
             segs = text.split("\r")
             self.assertTrue(segs[0].startswith("MSH|^~\\&|HIS"))
             pid = next(x for x in segs if x.startswith("PID|")).split("|")
