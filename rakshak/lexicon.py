@@ -100,7 +100,7 @@ FIELD_RULES = [
     ("ABHA", r"abha\w*|आभा|healthid"),
     ("PAN", r"pan|panno|pannumber"),
     ("EMAIL", r"e?mail|email\w*|ईमेल"),
-    ("PHONE", r"phone\w*|mobile\w*|mob|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom"),
+    ("PHONE", r"phone\w*|ph|phno|mobile\w*|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
     ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|reg|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
             r"पंजीकरण|पंजीयन|recordno|caseno|ipno|identifier|patientref|patref|mr"),
@@ -109,7 +109,7 @@ FIELD_RULES = [
     ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|"
                  r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
                  r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|"
-                 r"broughtby|accompanied\w*|consenter|signatory|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
+                 r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
     ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|relation_type"),
     ("DOCTOR", r"doctor\w*|dr|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
                r"nurse|staff|clerk|exported|exportedby|practitioner|performer|author|signedby|verifiedby"),
@@ -119,7 +119,7 @@ FIELD_RULES = [
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
              r"distt|jila|जिला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
              r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*"),
-    ("NAME", r"name|naam|नाम|patient|pt|beneficiary|insured|rogi|मरीज|मरीज़|रोगी|first|last|given|family|"
+    ("NAME", r"name|naam|नाम|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|patient|pt|beneficiary|insured|rogi|मरीज|मरीज़|रोगी|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
     ("AGE", r"age|umar|umra|आयु|उम्र|ageyears|yrs"),
     ("VILLAGE", r"village|gaon|gram|mohalla|locality|ग्राम|गाँव|गांव|मोहल्ला|city|town|basti|ward_no"),
@@ -156,8 +156,8 @@ def classify_key(key: str) -> str | None:
 # Labels that introduce a patient name inside free text
 NAME_LABEL = re.compile(
     r"(?i)(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s*of\s*(?:the\s*)?patient|patient|pt\.|naam|rogi\s*ka\s*naam|"
-    r"mareez|beneficiary|name|नाम|मरीज़?\s*का\s*नाम|मरीज़?|रोगी\s*का\s*नाम|रोगी)\s*[:：=\-]\s*")
-ADDRESS_LABEL = re.compile(r"(?i)(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|पता|निवास|निवासी)\s*[:：\-]?\s*")
+    r"mareez|beneficiary|name|nm\.?|नाम|रुग्णाचे\s*नाव|रुग्ण\s*नाव|नाव|मरीज़?\s*का\s*नाम|मरीज़?|रोगी\s*का\s*नाम|रोगी)\s*[:：=\-]\s*")
+ADDRESS_LABEL = re.compile(r"(?i)(?:address|addr\.?|residence|resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala|patta|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी)\s*[:：\-]?\s*")
 VILLAGE_LABEL = re.compile(r"(?i)(?:vill(?:age)?\.?|gaon|gram|ग्राम|गाँव|गांव|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
 DOB_LABEL = re.compile(r"(?i)(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*tithi)\s*[:：\-]?\s*")
 

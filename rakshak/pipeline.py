@@ -291,7 +291,52 @@ def guard_ids(recs: list) -> None:
                     r.ev["ids"].discard(i)
 
 
+MAX_JSON_DEPTH = 64
+
+
+def json_depth(obj) -> int:
+    """Iterative nesting depth (no recursion)."""
+    best, stack = 0, [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        best = max(best, d)
+        if best > MAX_JSON_DEPTH:
+            return best
+        if isinstance(o, dict):
+            stack.extend((v, d + 1) for v in o.values())
+        elif isinstance(o, list):
+            stack.extend((v, d + 1) for v in o)
+    return best
+
+
 # ================================================================ pass 1
+def _table_list(v) -> bool:
+    return (isinstance(v, list) and len(v) >= 2 and isinstance(v[0], list) and v[0]
+            and all(isinstance(h, str) for h in v[0]) and all(isinstance(x, list) for x in v[1:]))
+
+
+def _pairs(v) -> bool:
+    return (isinstance(v, list) and v and all(isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)
+                                               and not isinstance(x[1], (dict, list)) for x in v))
+
+
+def _ext_table(d: dict):
+    """{"cols": [names...], "rows": [[...], ...]} -> (rows_key, header) or None."""
+    if not isinstance(d, dict):
+        return None
+    heads = [(k, v) for k, v in d.items() if isinstance(v, list) and len(v) >= 2 and all(isinstance(h, str) for h in v)]
+    for hk_, header in heads:
+        for k, v in d.items():
+            if k != hk_ and isinstance(v, list) and v and all(isinstance(r, list) for r in v):
+                if sum(1 for r in v if len(r) == len(header)) >= 0.6 * len(v):
+                    return k, header
+    return None
+
+
+def _row_dict(header, row) -> dict:
+    return {str(h): row[i] for i, h in enumerate(header) if i < len(row)}
+
+
 def _patient_list(v) -> bool:
     """A list of objects whose items carry patient evidence (judged by the evidence extractor itself)."""
     if not (isinstance(v, list) and v and all(isinstance(x, dict) for x in v)):
@@ -316,6 +361,12 @@ def json_records(data, path=(), depth=0) -> list[tuple]:
             return []
     if depth > 6:
         return []
+    if _table_list(data):
+        return [path + ("@table",)]
+    et = _ext_table(data) if isinstance(data, dict) else None
+    if et:
+        EXT_HEADERS[id(data[et[0]])] = et[1]
+        return [path + (et[0], "@ext")]
     if _patient_list(data):
         deeper = []
         for i, v in enumerate(data):
@@ -337,7 +388,7 @@ def json_records(data, path=(), depth=0) -> list[tuple]:
 
 def _strip_lists(data, ptrs):
     """Copy of data without the patient arrays (for metadata harvesting)."""
-    if () in ptrs:
+    if () in ptrs or ("@table",) in ptrs or ("@ext",) in ptrs:
         return None
     if isinstance(data, dict):
         return {k: _strip_lists(v, [p[1:] for p in ptrs if p and p[0] == k]) if any(p and p[0] == k for p in ptrs) else v
@@ -349,11 +400,17 @@ def _strip_lists(data, ptrs):
 
 
 def _ptr(path: tuple, i: int) -> str:
+    path = tuple(p for p in path if p not in ("@table", "@ext"))
     return "".join("/" + str(p).replace("~", "~0").replace("/", "~1") for p in path) + f"/{i}"
+
+
+EXT_HEADERS: dict = {}
 
 
 def _get(data, path):
     for p in path:
+        if p in ("@table", "@ext"):
+            return data
         data = data[p]
     return data
 
@@ -392,6 +449,10 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
                 rec.ev.setdefault("conds", set()).add(norm(v))
             walk_evidence(v, ck, rec, H, order, rk)
     elif isinstance(obj, list):
+        if _pairs(obj):
+            for lab, val in obj:
+                walk_evidence({lab: val}, kind, rec, H, order, res_kind)
+            return
         for x in obj:
             walk_evidence(x, kind, rec, H, order, res_kind)
     elif isinstance(obj, (str, int, float)) and not isinstance(obj, bool):
@@ -441,8 +502,26 @@ def pass1(job: FileJob, H: Harvest):
         except (ValueError, RecursionError):
             kind = "table" if job.ext in (".csv", ".tsv") else "text"
     try:
+        if kind == "jsonl":
+            job.kind = "jsonl"
+            job.data = []
+            for i, line in enumerate(l for l in text.splitlines() if l.strip()):
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    obj = line
+                job.data.append(obj)
+                r = Rec(job.rel, f"row:{i}")
+                if isinstance(obj, (dict, list)):
+                    walk_evidence(obj, None, r, H, job.order)
+                else:
+                    text_evidence(obj, r, H, job.order)
+                job.recs.append(r)
+            return
         if kind == "json":
             job.data = json.loads(text)
+            if json_depth(job.data) > MAX_JSON_DEPTH:
+                raise ValueError("too_deep")
             first_nl = text.lstrip()[1:].lstrip(" ")
             mm = re.match(r"\r?\n( +)", text.lstrip()[1:])
             job.indent = len(mm.group(1)) if mm else None
@@ -450,9 +529,17 @@ def pass1(job: FileJob, H: Harvest):
             ptrs = json_records(job.data)
             if ptrs:
                 for path in ptrs:
-                    for i, item in enumerate(_get(job.data, path)):
+                    lst = _get(job.data, path)
+                    is_tab = path and path[-1] == "@table"
+                    is_ext = path and path[-1] == "@ext"
+                    hdr = lst[0] if is_tab else (EXT_HEADERS.get(id(lst)) if is_ext else None)
+                    if is_ext:
+                        job.rec_ptrs[(path, "@hdr")] = hdr
+                    for i, item in enumerate(lst):
+                        if is_tab and i == 0:
+                            continue
                         r = Rec(job.rel, _ptr(path, i))
-                        walk_evidence(item, None, r, H, job.order)
+                        walk_evidence(_row_dict(hdr, item) if hdr else item, None, r, H, job.order)
                         job.recs.append(r)
                         job.rec_ptrs[(path, i)] = r
                 meta = Rec(job.rel, "@meta")
@@ -656,12 +743,39 @@ class Rewriter:
                 out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk)
             return out
         if isinstance(obj, list):
+            if _pairs(obj):
+                out = []
+                for lab, val in obj:
+                    ck = child_kind(lab, kind) if lab not in STRUCT_KEYS else "STRUCT"
+                    out.append([self.value(lab, None, ctx, rec), self.value(val, ck, ctx, rec)])
+                return out
             return [self.walk(x, kind, ctx, rec, res_kind) for x in obj]
         return self.value(obj, kind, ctx, rec)
 
 
 def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None):
-    paths = {p for p, _ in job.rec_ptrs}
+    paths = {p for p, k in job.rec_ptrs if k != "@hdr"}
+    if path + ("@ext",) in paths and isinstance(node, list):
+        ep = path + ("@ext",)
+        header = job.rec_ptrs.get((ep, "@hdr")) or []
+        kinds = [child_kind(str(h), None) for h in header]
+        out = []
+        for i, row in enumerate(node):
+            r = job.rec_ptrs.get((ep, i))
+            c = ctx_for(r, job)
+            out.append([rw.walk(v, kinds[ci] if ci < len(kinds) else None, c, r) for ci, v in enumerate(row)]
+                       if isinstance(row, list) else rw.walk(row, None, c, r))
+        return out
+    if path + ("@table",) in paths and isinstance(node, list):
+        tp = path + ("@table",)
+        header = node[0]
+        kinds = [child_kind(str(h), None) for h in header]
+        out = [[rw.value(h, None, meta_ctx, None) if isinstance(h, str) else h for h in header]]
+        for i, row in enumerate(node[1:], start=1):
+            r = job.rec_ptrs.get((tp, i))
+            c = ctx_for(r, job)
+            out.append([rw.walk(v, kinds[ci] if ci < len(kinds) else None, c, r) for ci, v in enumerate(row)])
+        return out
     if path in paths and isinstance(node, list):
         out = []
         for i, item in enumerate(node):
@@ -866,7 +980,16 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if j.status != "sanitized":
             continue
         try:
-            if j.kind == "json":
+            if j.kind == "jsonl":
+                lines = []
+                for r, obj in zip(j.recs, j.data):
+                    c = ctx_for(r, j)
+                    if isinstance(obj, (dict, list)):
+                        lines.append(json.dumps(rw.walk(obj, None, c, r), ensure_ascii=False))
+                    else:
+                        lines.append(scrub_text(obj, c, sw))
+                result = "\n".join(lines) + "\n"
+            elif j.kind == "json":
                 if j.rec_ptrs:
                     meta_ctx = ctx_for(None, j)
                     data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
@@ -874,6 +997,8 @@ def run(inp: Path, out: Path, policy: dict) -> int:
                     r = j.doc_rec
                     data = rw.walk(j.data, None, ctx_for(r, j), r)
                 result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
+            if j.kind in ("jsonl", "json"):
+                pass
             elif j.kind == "table":
                 buf = io.StringIO()
                 w = csv.writer(buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")

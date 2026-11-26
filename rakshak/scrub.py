@@ -7,6 +7,7 @@ import re
 
 from . import lexicon as L
 from .engine import STOP_WORDS as STOPW
+from .engine import RX_DOTTED_AADHAAR, RX_DOTTED_PHONE
 from .engine import (CLIN_PROTECT, COMMON_WORDS, DEVA, NAME_SEQ, NAME_TOK, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK,
                      RX_MASKED_AADHAAR, RX_PAN, classify_digits, clean_name_seq, id_digits_ok, norm,
                      shift_dates_in)
@@ -76,14 +77,16 @@ class Sweeper:
 # ---------------------------------------------------------------- pieces
 RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
-RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|जिला|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
+RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|ji\.|jilha|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
-RX_HOUSE = re.compile(rf"(?i)(?:(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
+RX_HOUSE = re.compile(rf"(?i)(?:(?:घर|मकान|म\.)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)\s*[\d०-९]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?)|मकान\s*(?:नं\.?|नंबर)?|म\.\s*नं\.?)\s*[:\-]?\s*[\w/\-]+")
 RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
+RX_DEVA_VILLAGE = re.compile(rf"(?<![{DEVA}])[{DEVA}]{{2,}}(?:पुर|पुरा|गांव|गाँव|गाव|पट्टी|वाडी|नगर|खेड़ा|खेडा|डीह|सराय|गंज)(?:\s+(?:टांडा|बुद्रुक|खुर्द|कलां|कला|पूर्वी|पश्चिमी))?(?![{DEVA}])"
+                             rf"|(?<![{DEVA}])[{DEVA}]{{2,}}\s+(?:टांडा|बुद्रुक|खुर्द|कलां)(?![{DEVA}])")
 RX_WARD_ADDR = re.compile(r"(?i)(?<=,\s)Ward\s*(?:No\.?)?\s*\d+\b(?!\s*[(/])|\bWard\s*(?:No\.?)?\s*\d+(?=\s*,)")
 RX_WARDNUM = re.compile(r"(?i)\bWard\s*(?:No\.?)?\s*\d+(?!\s*\()")
-RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने)")
-RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
+RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+front\s+of|next\s+to)\s+(?:the\s+)?[A-Z][\w]*(?:\s+[A-Z][\w]*){{0,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{0,3}}\s+(?:के\s+)?(?:पास|पीछे|सामने)|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
+RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
 RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/Sex)?|\bAge\s*/\s*Gender|आयु|उम्र|\bUmar|\bUmra)\s*[:\-]?\s*)(\d{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|saal|sal)?)"
                     rf"|(?<![\w.x×])(\d{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
@@ -111,14 +114,15 @@ _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
                          rf"handed\s+over\s+to|(?:complaint|shikayat|request|application|letter|statement|feedback|query)\s+(?:by|from)|"
-                         rf"filed\s+by|submitted\s+by|raised\s+by|lodged\s+by|written\s+by|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
+                         rf"filed\s+by|submitted\s+by|signature|signed|sign\.?|हस्ताक्षर|sahi|regards|from|to|cc|bcc|attn\.?|"
+                         rf"raised\s+by|lodged\s+by|written\s+by|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
 RX_CONSENT = re.compile(rf"(?i)\b(?:I|मैं)\s*,?\s+({NAME_SEQ})\s*,?\s+(?:S/O|D/O|W/O|consent|agree|hereby|authori[sz]e|declare|give|am|aged|resident)\b")
 RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}})\s+(?:visited|came|called|met|brought|accompanied|"
                           rf"signed|left|arrived|requested|collected|took|stayed|attended|enquired)\b")
 NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{1,3}})")
 RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.?\s*(?:No|Number|#)|IP\s*No|IPD\s*No|OPD\s*No|"
                          r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Record\s*No|File\s*No|"
-                         r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-]{2,})")
+                         r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?)|UID|Aadhaar|Aadhar|ABHA)\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
                           rf"mother|brother|sister|guardian|neighbour|friend|raahgir|rahgir|padosi|padosan|rishtedaar|rishtedar|mitra|dost|saathi|"
                           rf"gawah|beta|beti|bhai|behen|bahan|pati|patni|maa|pita|chacha|chachi|mama|mami|bua|nana|nani|dada|dadi)\b", re.I)
@@ -189,6 +193,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     # 4. strong identifiers
     t = RX_EMAIL.sub(red("[EMAIL]"), t)
     t = RX_MASKED_AADHAAR.sub(red("[AADHAAR]"), t)
+    t = RX_DOTTED_AADHAAR.sub(red("[AADHAAR]"), t)
+    t = RX_DOTTED_PHONE.sub(red("[PHONE]"), t)
     t = sw.rx_ids.sub(lambda m: (st.__setitem__("identifiers", st["identifiers"] + 1), put(ctx.psn or "[ID]"))[1], t)
 
     def digrun(m):
@@ -307,6 +313,13 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(g) - m.start(0)] + put("[VILLAGE]")
     t = RX_VILL.sub(vill, t)
     t = sw.rx_place.sub(red("[PLACE]"), t)
+
+    def dvill(m):
+        if norm(m.group(0)) in ctx.H.safe_places:
+            return m.group(0)
+        st["identifiers"] += 1
+        return put("[VILLAGE]")
+    t = RX_DEVA_VILLAGE.sub(dvill, t)
 
     def pin(m):
         st["identifiers"] += 1

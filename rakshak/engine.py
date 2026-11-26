@@ -98,8 +98,24 @@ def looks_binary(text: str) -> bool:
     return bad / len(sample) > 0.02
 
 
+def _delimited(text: str) -> str | None:
+    lines = [l for l in text.splitlines() if l.strip()][:40]
+    if len(lines) < 3:
+        return None
+    for d in ("|", "\t", ";"):
+        counts = [l.count(d) for l in lines]
+        c0 = counts[0]
+        if c0 >= 2 and sum(1 for c in counts if c == c0) >= 0.7 * len(counts):
+            return d
+    return None
+
+
 def sniff_kind(ext: str, text: str) -> str:
     s = text.lstrip()
+    if ext in (".jsonl", ".ndjson"):
+        return "jsonl"
+    if ext in (".txt", "") and _delimited(text):
+        return "table"
     if ext == ".json" or (s[:1] in "{[" and ext in (".csv", ".tsv", ".txt", "")):
         if s[:1] in "{[":
             return "json"
@@ -111,6 +127,10 @@ def sniff_kind(ext: str, text: str) -> str:
 
 
 def sniff_delim(text: str, ext: str) -> str:
+    if ext not in (".csv", ".tsv"):
+        d = _delimited(text)
+        if d:
+            return d
     first = text.split("\n", 1)[0]
     cands = {"\t": first.count("\t"), ",": first.count(","), ";": first.count(";"), "|": first.count("|")}
     if ext == ".tsv" and cands["\t"]:
@@ -119,21 +139,24 @@ def sniff_delim(text: str, ext: str) -> str:
     return best if cands[best] else ("\t" if ext == ".tsv" else ",")
 
 
+_INDIC_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
 # ============================================================== dates
 _MON = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
 _HI_MON = {"जनवरी": 1, "फ़रवरी": 2, "फरवरी": 2, "मार्च": 3, "अप्रैल": 4, "अप्रेल": 4, "मई": 5, "जून": 6, "जुलाई": 7,
            "अगस्त": 8, "सितंबर": 9, "सितम्बर": 9, "अक्टूबर": 10, "अक्तूबर": 10, "नवंबर": 11, "नवम्बर": 11,
-           "दिसंबर": 12, "दिसम्बर": 12}
+           "दिसंबर": 12, "दिसम्बर": 12, "जानेवारी": 1, "फेब्रुवारी": 2, "एप्रिल": 4, "मे": 5, "जुलै": 7,
+           "ऑगस्ट": 8, "सप्टेंबर": 9, "ऑक्टोबर": 10, "नोव्हेंबर": 11, "डिसेंबर": 12}
 _HI_NAMES = {1: "जनवरी", 2: "फ़रवरी", 3: "मार्च", 4: "अप्रैल", 5: "मई", 6: "जून", 7: "जुलाई", 8: "अगस्त", 9: "सितंबर",
              10: "अक्टूबर", 11: "नवंबर", 12: "दिसंबर"}
-RX_HID = re.compile(r"(?<![\d])(\d{1,2})\s+(" + "|".join(sorted(_HI_MON, key=len, reverse=True)) + r")\s*,?\s+((?:19|20)\d{2})(?!\d)")
+RX_HID = re.compile(r"(?<![\d०-९])([\d०-९]{1,2})\s+(" + "|".join(sorted(_HI_MON, key=len, reverse=True)) + r")\s*,?\s+((?:19|20|१९|२०)[\d०-९]{2})(?![\d०-९])")
 _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
              "November", "December"]
 RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2})(?![\d/.\-])")
 RX_ISO = re.compile(r"(?<![\d/.\-])((?:19|20)\d{2})([-/.])(\d{2})\2(\d{2})(?![\d/.\-])")
-RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-]+)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
-                      r"(,?[\s\-]+)((?:19|20)\d{2})\b")
-RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)\s+(\d{1,2})(st|nd|rd|th)?,?\s+((?:19|20)\d{2})\b")
+RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
+                      r"(,?[\s\-/.]+)((?:19|20)?\d{2})\b")
+RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)[\s\-]+(\d{1,2})(st|nd|rd|th)?,?[\s\-]+((?:19|20)\d{2})\b")
 
 
 def date_votes(text: str) -> tuple[int, int]:
@@ -192,7 +215,8 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
 
     def textd(m):
         mon = _MON.get(m.group(4).lower()[:3])
-        d = _mk(int(m.group(7)), mon, int(m.group(1)))
+        yy = m.group(7)
+        d = _mk(int(yy) + (2000 if len(yy) == 2 else 0), mon, int(m.group(1)))
         if not d:
             return m.group(0)
         n = d + delta
@@ -205,7 +229,9 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         suf = _ord(n.day) if m.group(2) else ""
         if m.group(2) and m.group(2).isupper():
             suf = suf.upper()
-        return w(f"{n.day}{suf}{m.group(3)}{new_mon}{m.group(6)}{n.year}")
+        ys = str(n.year) if len(yy) == 4 else f"{n.year % 100:02d}"
+        ds = f"{n.day:02d}" if len(m.group(1)) == 2 else str(n.day)
+        return w(f"{ds}{suf}{m.group(3)}{new_mon}{m.group(6)}{ys}")
 
     def textm(m):
         mon = _MON.get(m.group(1).lower()[:3])
@@ -220,7 +246,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         return w(f"{new_mon} {n.day}{_ord(n.day) if m.group(4) else ''}, {n.year}")
 
     def hid(m):
-        d = _mk(int(m.group(3)), _HI_MON[m.group(2)], int(m.group(1)))
+        d = _mk(int(m.group(3).translate(_INDIC_DIGITS)), _HI_MON[m.group(2)], int(m.group(1).translate(_INDIC_DIGITS)))
         if not d:
             return m.group(0)
         n = d + delta
@@ -263,14 +289,13 @@ def parse_date(s: str, order: str) -> dt.date | None:
 # ============================================================== identifier patterns
 RX_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 RX_PAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Za-z0-9])")
+RX_DOTTED_AADHAAR = re.compile(r"(?<![\d.])\d{4}\.\d{4}\.\d{4}(?![\d.])")
+RX_DOTTED_PHONE = re.compile(r"(?<![\d.])(?:\+?91[\s.\-]?)?[6-9]\d{4}[.·]\d{5}(?![\d.])|(?<![\d.])[6-9]\d{2}[.·]\d{3}[.·]\d{4}(?![\d.])")
 RX_MASKED_AADHAAR = re.compile(r"(?i)(?<![\w])[x*•]{4}[\s\-]?[x*•]{4}[\s\-]?\d{4}(?!\d)")
 RX_DIGITRUN = re.compile(r"(?<![\w/:])(?<!\d\.)(\+?[0-9०-९][0-9०-९\s\-]{6,}[0-9०-९])(?![\w/:]|\.\d)")
 # Hospital / insurance style IDs: letters + >=4 digits, with optional / - separators
 RX_IDTOK = re.compile(r"(?<![\w/\-:#])(?=[\w/\-:#]*\d{3})(?=[\w/\-:#]*[A-Za-z])[A-Za-z]{1,8}[A-Za-z0-9]*(?:[/\-:#][A-Za-z0-9]+)+(?![\w/\-:#])"
                       r"|(?<![\w/\-])[A-Za-z]{2,8}\d{5,}(?![\w/\-])")
-
-
-_INDIC_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 
 
 def classify_digits(run: str) -> str | None:
