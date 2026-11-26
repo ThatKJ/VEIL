@@ -10,8 +10,10 @@ evidence, so two individually plausible links cannot chain unrelated people toge
 """
 from __future__ import annotations
 
+import math
+import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from . import lexicon as L
 
@@ -82,6 +84,31 @@ def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
     return inits[0] == ym[0][0] and (len(inits) == 1 or len(ym) == 1 or all(any(t[0] == i for t in ym) for i in inits))
 
 
+def _edit_le1(a: str, b: str) -> bool:
+    """True when two >=4-char skeletons starting with the same letter differ by <=1 edit."""
+    if len(a) < 4 or len(b) < 4 or a[0] != b[0] or abs(len(a) - len(b)) > 1:
+        return False
+    if a == b:
+        return True
+    i = j = diffs = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+        else:
+            diffs += 1
+            if diffs > 1:
+                return False
+            if len(a) > len(b):
+                i += 1
+            elif len(b) > len(a):
+                j += 1
+            else:
+                i += 1
+                j += 1
+    return diffs + (len(a) - i) + (len(b) - j) <= 1
+
+
 def _name_compatible(a: Cluster, b: Cluster) -> bool:
     if not a.names or not b.names:
         return True
@@ -92,7 +119,24 @@ def _name_compatible(a: Cluster, b: Cluster) -> bool:
             if mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)
                             or _initial_match(x, y) or _initial_match(y, x)):
                 return True
+            if (x[0] == y[0] or _edit_le1(x[0], y[0])) and len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1]:
+                return True
     return False
+
+
+def _rel_match(ra: set[tuple[str, ...]], rb: set[tuple[str, ...]]) -> int:
+    """Return 2 for full multi-token relative match, 1 for compatible prefix/single-token match, 0 otherwise."""
+    if not ra or not rb:
+        return 0
+    if ra & rb:
+        return 2 if any(len(x) >= 2 for x in (ra & rb)) else 1
+    for x in ra:
+        for y in rb:
+            mx = {t for t in x if len(t) >= 2}
+            my = {t for t in y if len(t) >= 2}
+            if mx and my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)):
+                return 1
+    return 0
 
 
 def compatible(a: Cluster, b: Cluster) -> bool:
@@ -161,15 +205,22 @@ class Linker:
                 a, b = self.cl[self.find(idx[0])], self.cl[self.find(j)]
                 if a.names and b.names:
                     self.union(idx[0], j)
-        # ---- rule 2: same name + second clue, only if unambiguous
+        # ---- rule 2: Fellegi-Sunter-inspired evidence scoring with term-frequency weights,
+        # only accepting when a candidate clears threshold AND leads the runner-up by a clear margin.
         for _ in range(2):
             roots = sorted({self.find(i) for i in range(n)})
+            n_roots = max(2, len(roots))
+            tok_df = Counter()
             index = defaultdict(list)
             for r in roots:
+                seen_r = set()
                 for nk in self.cl[r].names:
                     for t in set(nk):
                         if len(t) >= 2:
                             index[t].append(r)
+                            seen_r.add(t)
+                for t in seen_r:
+                    tok_df[t] += 1
             for r in roots:
                 if self.find(r) != r:
                     continue
@@ -179,17 +230,40 @@ class Linker:
                     for t in set(nk):
                         if len(t) >= 2:
                             cands.update(index.get(t, []))
-                good = []
+                scored = []
                 for o in sorted(cands):
                     o = self.find(o)
-                    if o == r or o in good:
+                    if o == r or any(x[1] == o for x in scored):
                         continue
                     d = self.cl[o]
-                    clue = bool(c.dobs & d.dobs) or bool(c.rels & d.rels) or (
-                        bool(c.villages & d.villages) and c.ages and d.ages
-                        and min(abs(x - y) for x in c.ages for y in d.ages) <= 2)
-                    if clue and compatible(c, d):
-                        good.append(o)
-                if len(good) == 1:
-                    self.union(r, good[0])
+                    if not (c.names and d.names) or not compatible(c, d):
+                        continue
+                    rel_m = _rel_match(c.rels, d.rels)
+                    dob_m = bool(c.dobs & d.dobs)
+                    vill_m = (bool(c.villages & d.villages) and c.ages and d.ages
+                              and min(abs(x - y) for x in c.ages for y in d.ages) <= 2)
+                    if not (dob_m or rel_m or vill_m):
+                        continue
+                    shared = {t for nk in c.names for t in nk if len(t) >= 2} & {
+                        t for nk in d.names for t in nk if len(t) >= 2
+                    }
+                    idf = sum(min(3.5, math.log2(n_roots / max(1, tok_df[t]))) for t in shared)
+                    fs = idf
+                    if dob_m:
+                        fs += 4.5
+                    if rel_m:
+                        fs += 4.5 if rel_m == 2 else 3.0
+                    if vill_m:
+                        fs += 3.5
+                    if c.genders and d.genders and (c.genders & d.genders):
+                        fs += 0.5
+                    if c.ages and d.ages and min(abs(x - y) for x in c.ages for y in d.ages) <= 1:
+                        fs += 0.5
+                    scored.append((fs, o))
+                scored.sort(reverse=True)
+                if len(scored) == 1:
+                    self.union(r, scored[0][1])
+                elif len(scored) > 1 and os.environ.get("RAKSHAK_P_FS_TIEBREAK", "on") != "off":
+                    if scored[0][0] - scored[1][0] >= 2.0:
+                        self.union(r, scored[0][1])
         return [self.find(i) for i in range(n)]

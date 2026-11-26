@@ -32,10 +32,10 @@ def band_of(age: int, width: int) -> str:
 
 
 class Rule:
-    __slots__ = ("band", "dob", "pin", "tehsil", "reason")
+    __slots__ = ("band", "dob", "pin", "tehsil", "dist", "reason")
 
-    def __init__(self, band=5, dob="shift", pin="drop", tehsil="drop", reason="default"):
-        self.band, self.dob, self.pin, self.tehsil, self.reason = band, dob, pin, tehsil, reason
+    def __init__(self, band=5, dob="shift", pin="drop", tehsil="drop", dist="keep", reason="default"):
+        self.band, self.dob, self.pin, self.tehsil, self.dist, self.reason = band, dob, pin, tehsil, dist, reason
 
 
 def consistent_band(ages: list[int], width: int) -> tuple[int, int] | None:
@@ -102,7 +102,7 @@ def _all_bands(groups, widths):
 def plan(groups, policy) -> Plan:
     p = _plan(groups, policy)
     if str(policy.get("consistent_bands", "on")) == "on":
-        p.bands = _all_bands(groups, {5, 10, int(policy.get("age_band_years", 5))})
+        p.bands = _all_bands(groups, {5, 10, 20, int(policy.get("age_band_years", 5))})
     return p
 
 
@@ -110,12 +110,14 @@ def _plan(groups, policy) -> Plan:
     mode = str(policy.get("qi_mode", "adaptive"))
     base_band = int(policy.get("age_band_years", 5))
     if mode == "mask":
-        return Plan(Rule(band=1, dob="shift", pin="keep6", tehsil="keep", reason="mask"), {}, {"mode": mode})
-    default = Rule(band=base_band, dob="shift", pin=str(policy.get("pin_mode", "drop")), tehsil="drop", reason="fixed")
+        return Plan(Rule(band=1, dob="shift", pin="keep6", tehsil="keep", dist="keep", reason="mask"), {}, {"mode": mode})
+    default = Rule(band=base_band, dob="shift", pin=str(policy.get("pin_mode", "drop")), tehsil="drop", dist="keep", reason="fixed")
     if mode == "fixed":
         return Plan(default, {}, {"mode": mode})
 
     esc_dob = "year_drop" if str(policy.get("escalate_dob", "drop")) == "drop" else "shift"
+    rare_dist = str(policy.get("rare_dist_mode", "drop"))
+    rare_band = int(policy.get("rare_band", 10))
     k_min = int(policy.get("min_group_size", 5))
     rare_max = int(policy.get("rare_condition_max_patients", 3))
     profiles = {}
@@ -126,9 +128,9 @@ def _plan(groups, policy) -> Plan:
 
     cond_count = Counter(c for p in profiles.values() for c in p["conds"])
 
-    def cell(p, band, with_birth):
+    def cell(p, band, with_birth, with_dist=True):
         a = p["age"] // band if p["age"] is not None else None
-        return (p["dist"], p["g"], a, p["birth"] if with_birth else None)
+        return (p["dist"] if with_dist else None, p["g"], a, p["birth"] if with_birth else None)
 
     rules, why = {}, Counter()
     cells5 = Counter(cell(p, base_band, True) for p in profiles.values())
@@ -138,14 +140,17 @@ def _plan(groups, policy) -> Plan:
         rare = any(cond_count[c] <= rare_max for c in p["conds"])
         old = p["age"] is not None and p["age"] >= 80
         if rare or old:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", reason="rare" if rare else "old")
+            rules[key] = Rule(band=rare_band, dob=esc_dob, pin="drop", tehsil="drop",
+                              dist=rare_dist, reason="rare" if rare else "old")
         elif cells5[cell(p, base_band, True)] >= k_min:
             continue                                  # already hidden in a crowd: keep the useful values
         elif cells5n[cell(p, base_band, False)] >= k_min:
-            rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", reason="k_birth")
+            rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_birth")
         elif cells10[cell(p, 10, False)] >= k_min:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", reason="k_band")
+            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_band")
+        elif cells10[cell(p, 10, False)] >= 2:
+            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_all")
         else:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", reason="k_all")
+            rules[key] = Rule(band=rare_band, dob=esc_dob, pin="drop", tehsil="drop", dist=rare_dist, reason="k_singleton")
         why[rules[key].reason] += 1
     return Plan(default, rules, {"mode": mode, "patients": len(profiles), "escalated": dict(why)})

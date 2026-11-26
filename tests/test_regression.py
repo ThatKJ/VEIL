@@ -115,6 +115,86 @@ class RegressionTests(unittest.TestCase):
             rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
             self.assertEqual(rep["counts"]["files_quarantined"], 1)
 
+    def test_phase7_doctor_relative_fhir_prekin_hidden_and_unlinked_shift(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out1, out2 = root / "input", root / "out1", root / "out2"
+            inp.mkdir()
+            (inp / "note_kin.txt").write_text(
+                "Xuvip Poxak, W/o Beegan Baghel, 34 yrs/F, 12 Apr 2024\n"
+                "Seen by Dr. Beegan Baghel\n",
+                encoding="utf-8",
+            )
+            (inp / "note_kin2.txt").write_text(
+                "Patient: Xuvip Poxak\n"
+                "W/o Beegan\n"
+                "Seen on 15 Apr 2024\n",
+                encoding="utf-8",
+            )
+            (inp / "bundle.json").write_text(json.dumps({
+                "resourceType": "Bundle",
+                "type": "collection",
+                "entry": [{
+                    "resource": {
+                        "resourceType": "Patient",
+                        "id": "p1",
+                        "name": [{"text": "Xuvip Poxak"}],
+                        "gender": "female",
+                        "birthDate": "1990-05-14",
+                    }
+                }, {
+                    "resource": {
+                        "resourceType": "Condition",
+                        "code": {"text": "RareConditionXYZ"},
+                    }
+                }],
+            }), encoding="utf-8")
+            (inp / "lab_panel.json").write_text(json.dumps({
+                "patient": {"name": "Xuvip Poxak", "dob": "14/05/1990"},
+                "panels": [{"name": "CBC", "results": [{"test": "WBC", "result": "7200", "unit": "/uL"}]}],
+            }), encoding="utf-8")
+            (inp / "hidden.txt").write_text(
+                "Patient: X\u200buvip Po\u0445ak\n"
+                "Note: \\u0058\\u0075\\u0076\\u0069\\u0070\\u0020\\u0050\\u006f\\u0078\\u0061\\u006b\n"
+                "Hex: " + b"Xuvip Poxak".hex() + "\n",
+                encoding="utf-8",
+            )
+            (inp / "unlinked.txt").write_text("Unlinked clinic log: 03/04/2023\n", encoding="utf-8")
+            self._run_cli(inp, out1, secret="secret-alpha-1234567890")
+            self._run_cli(inp, out2, secret="secret-beta-0987654321")
+
+            san_kin = (out1 / "sanitized" / "note_kin.txt").read_text(encoding="utf-8")
+            self.assertIn("Dr. Beegan Baghel", san_kin)
+            self.assertNotIn("Xuvip", san_kin)
+            self.assertIn("[RELATIVE]", san_kin)
+
+            san_fhir = json.loads((out1 / "sanitized" / "bundle.json").read_text(encoding="utf-8"))
+            pat = san_fhir["entry"][0]["resource"]
+            self.assertNotIn("birthDate", pat)
+
+            san_lab = json.loads((out1 / "sanitized" / "lab_panel.json").read_text(encoding="utf-8"))
+            self.assertEqual(san_lab["panels"][0]["results"][0]["test"], "WBC")
+
+            san_hid1 = (out1 / "sanitized" / "hidden.txt").read_text(encoding="utf-8")
+            self.assertNotIn("Xuvip", san_hid1)
+            self.assertNotIn("Poxak", san_hid1)
+            self.assertNotIn(b"Xuvip Poxak".hex(), san_hid1)
+
+            san_unl1 = (out1 / "sanitized" / "unlinked.txt").read_text(encoding="utf-8")
+            san_unl2 = (out2 / "sanitized" / "unlinked.txt").read_text(encoding="utf-8")
+            self.assertNotIn("03/04/2023", san_unl1)
+            self.assertNotEqual(san_unl1, san_unl2)
+
+            recs = [json.loads(l) for l in (out1 / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            kin_pids = [r["patient"] for r in recs if r["file"] in ("sanitized/note_kin.txt", "sanitized/note_kin2.txt")]
+            self.assertEqual(len(kin_pids), 2)
+            self.assertTrue(all(kin_pids))
+            self.assertEqual(len(set(kin_pids)), 1)
+            dob_pids = [r["patient"] for r in recs if r["file"] in ("sanitized/bundle.json", "sanitized/lab_panel.json")]
+            self.assertEqual(len(dob_pids), 2)
+            self.assertTrue(all(dob_pids))
+            self.assertEqual(len(set(dob_pids)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

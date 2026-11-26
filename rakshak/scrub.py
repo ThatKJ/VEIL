@@ -5,6 +5,7 @@ import base64
 import binascii
 import os
 import re
+from urllib.parse import unquote_plus
 
 from . import lexicon as L
 from .engine import STOP_WORDS as STOPW
@@ -77,8 +78,9 @@ class Sweeper:
 
 # ---------------------------------------------------------------- pieces
 RX_B64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{24,65536}={0,2}")
+RX_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{2}){6,128}(?![0-9A-Za-z])")
 RX_ADDR_LINE = re.compile(L.ADDRESS_LABEL.pattern + r"([^\n]*)", re.I)
-RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|jillo|ji\.|jilha|ज़िला|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
+RX_KEEP_ADMIN = re.compile(rf"(?i)^\s*(?:distt?\.?|district|jila|zila|jillo|ji\.|jilha|जि\.?|ज़िला|जिला|जिल्हा|जनपद)\s*[:.]?\s*([A-Za-z{DEVA} ]+?)\s*$")
 RX_PIN_TAIL = re.compile(r"(?<!\d)([1-8]\d{2})\s?(\d{3})(?!\d)")
 RX_HOUSE = re.compile(rf"(?i)(?:(?:घर|मकान|म\.|कोठी)\s*(?:क्र\.?|क्रमांक|नं\.?|नंबर|सं\.?)?\s*[{INDIC_DIG}]+|(?<![\w&])#\s?\d+[A-Za-z]?\b|\b(?:H\.?\s?No\.?|Ghar\s*(?:No\.?|number)|House\s*(?:No\.?)?|Makan\s*(?:No\.?)?|Flat\s*(?:No\.?)?|Plot\s*(?:No\.?)?|Qtr\.?\s*No\.?|Kothi\s*(?:No\.?|number)?|Block\s*(?:No\.?)?)\s*[:\-]?\s*(?=\S*[{INDIC_DIG}])[\w/\-{INDIC_DIG}]+|मकान\s*(?:नं\.?|नंबर)?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+|म\.\s*नं\.?\s*[:\-]?\s*[\w/\-{INDIC_DIG}]+)")
 RX_MOHALLA = re.compile(rf"(?i)\b(?:Mohalla|Mohallah|Mohala|Muhalla|Colony|Nagar\s+Colony|Ward\s+No\.?|Faliyu)\s+[A-Z][\w]*(?:\s+[A-Z][\w]*)?|\bPara\s+[A-Z][a-zA-Z]{{2,}}(?:\s+[A-Z][a-zA-Z]{{2,}})?|मोहल्ला\s+[{DEVA}]+(?:\s+[{DEVA}]+)?")
@@ -92,10 +94,11 @@ RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+fro
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
 RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)\s*[:\-.]?\s*([A-Z][\w]*(?:\s+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)\s*[:\-]?\s*([{DEVA}]+(?:\s+[{DEVA}]+){{0,2}})")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
-RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|आयु|उम्र|उमर|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
+RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|आयु|उम्र|उमर|वय|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
                     rf"|(?<![\w.x×])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
 RX_URL = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+|\burn:(?:uuid|oid):[\w.\-]+")
 RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|वर्ष|saal|sal)\b\.?(?:\s*old)?)(?=\s*[,/;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|पुरुष|महिला|$|,|\)|;))")
+RX_PRE_KIN = re.compile(rf"(?i)(?:^|(?<=[\n,;|(\[]))\s*({NAME_SEQ}),\s*(?=(?:S/O|D/O|W/O|H/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of)\b)")
 RX_KIN_POSS = re.compile(rf"(?i)\b(?:Shri|Sri|Smt\.?|Shrimati|श्री|श्रीमती)\s+({NAME_SEQ})'s\s+(?:wife|husband|son|daughter|father|mother)\b")
 RX_KIN = re.compile(rf"(?i)\b({L.KIN})\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
@@ -151,6 +154,72 @@ def generalize_address(value: str, band_pin: bool = False) -> str:
     return out or "[ADDRESS]"
 
 
+_HOMOGLYPHS = str.maketrans({
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I",
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ѕ": "s", "ј": "j",
+})
+_NONCONF_CYR = re.compile(r"[\u0400-\u04FF]")
+_HOMO_TOK = re.compile(r"[A-Za-z0-9\u0400-\u04FF]{2,}")
+_RX_UESC = re.compile(r"\\u([0-9a-fA-F]{4})")
+_RX_HTML_NUM = re.compile(r"&#(?:x([0-9a-fA-F]{2,4})|(\d{2,5}));")
+_RX_PCT = re.compile(r"(?:%[0-9a-fA-F]{2}){2,}")
+
+
+def _decode_hidden(text: str) -> str:
+    """Normalise zero-width joiners, homoglyph spoofs, unicode/HTML/percent escapes before scrubbing."""
+    t = re.sub(r"[\u200b\u2060\ufeff]", "", text)
+    t = re.sub(r"(?<=[A-Za-z0-9])[\u200c\u200d]+(?=[A-Za-z0-9])", "", t)
+    if _NONCONF_CYR.search(t):
+        def _fix_homo(m):
+            tok = m.group(0)
+            rep = tok.translate(_HOMOGLYPHS)
+            return rep if not _NONCONF_CYR.search(rep) else tok
+        t = _HOMO_TOK.sub(_fix_homo, t)
+    if "\\u" in t:
+        def _uesc(m):
+            cp = int(m.group(1), 16)
+            if cp >= 0x20 and not (0xD800 <= cp <= 0xDFFF) and cp not in (0x22, 0x27, 0x5C, 0x7F):
+                return chr(cp)
+            return m.group(0)
+        t = _RX_UESC.sub(_uesc, t)
+    if "&#" in t:
+        def _hnum(m):
+            cp = int(m.group(1), 16) if m.group(1) else int(m.group(2))
+            if cp >= 0x20 and cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF) and cp not in (0x22, 0x27, 0x5C, 0x7F):
+                return chr(cp)
+            return m.group(0)
+        t = _RX_HTML_NUM.sub(_hnum, t)
+    if "%" in t:
+        def _pct(m):
+            if re.search(r"https?://\S*$", t[:m.start()], re.I):
+                return m.group(0)
+            try:
+                dec = bytes.fromhex(m.group(0).replace("%", "")).decode("utf-8")
+            except ValueError:
+                return m.group(0)
+            if dec and all((c.isprintable() or c == " ") and c not in "\r\n" for c in dec):
+                return dec
+            return m.group(0)
+        t = _RX_PCT.sub(_pct, t)
+    return t
+
+
+def hex_scrub(tok: str, ctx: "Ctx", sw: "Sweeper") -> str:
+    try:
+        txt = bytes.fromhex(tok).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return tok
+    if not txt or sum(c.isprintable() or c in "\n\r\t" for c in txt) / len(txt) < 0.95:
+        return tok
+    if not any(c.isalpha() or "\u0900" <= c <= "\u0aff" for c in txt):
+        return tok
+    clean = scrub_text(txt, ctx, sw, allow_b64=False)
+    if clean == txt:
+        return tok
+    ctx.stats["identifiers"] += 1
+    return clean.encode("utf-8").hex()
+
+
 def b64_scrub(tok: str, ctx: "Ctx", sw: "Sweeper") -> str:
     try:
         raw = base64.b64decode(tok + "=" * (-len(tok) % 4), validate=True)
@@ -191,8 +260,9 @@ def _scrub_url(url: str, ctx: Ctx, sw: Sweeper, put) -> str:
                 ctx.stats["identifiers"] += 1
                 parts.append(f"{k}=REDACTED")
             elif eq:
-                sv = scrub_text(v.replace("+", " "), ctx, sw, allow_b64=False)
-                parts.append(f"{k}={sv.replace(' ', '+')}" if sv != v.replace("+", " ") else pair)
+                raw_v = unquote_plus(v)
+                sv = scrub_text(raw_v, ctx, sw, allow_b64=False)
+                parts.append(f"{k}={sv.replace(' ', '+')}" if sv != raw_v else pair)
             else:
                 parts.append(pair)
         query = "&".join(parts)
@@ -237,7 +307,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return text
     st = ctx.stats
     M = Masker()
-    t = text
+    t = _decode_hidden(text)
 
     def put(s):
         return M.put(s)
@@ -250,11 +320,15 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
 
     if allow_b64:
         t = RX_B64.sub(lambda m: put(b64_scrub(m.group(0), ctx, sw)), t)
+        t = RX_HEX.sub(lambda m: put(hex_scrub(m.group(0), ctx, sw)), t)
 
     # 1. labelled address lines -> district level only
     def addr(m):
         st["identifiers"] += 1
-        return m.group(0)[: m.start(1) - m.start(0)] + put(generalize_address(m.group(1)))
+        head = m.group(0)[: m.start(1) - m.start(0)]
+        if ctx.rule is not None and ctx.rule.dist == "drop":
+            return head + put("[ADDRESS]")
+        return head + put(generalize_address(m.group(1)))
     t = RX_ADDR_LINE.sub(addr, t)
 
     # 2. protect URLs (scrubbing query params first), attachment filenames, doctor names
@@ -309,6 +383,17 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         st["identifiers"] += 1
         return m.group(0)[: m.start(m.lastindex) - m.start(0)] + put(ctx.patient_token) + seq[consumed:]
     t = RX_LABEL.sub(lab, t)
+
+    def pre_kin(m):
+        toks = clean_name_seq(m.group(1))
+        if not _name_ok(toks) or not (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
+            return m.group(0)
+        seq = m.group(1)
+        consumed = len(" ".join(toks)) if " ".join(toks) in seq else len(seq)
+        st["identifiers"] += 1
+        lead = m.group(0)[: m.start(1) - m.start(0)]
+        return lead + put(ctx.patient_token) + seq[consumed:] + m.group(0)[m.end(1) - m.start(0):]
+    t = RX_PRE_KIN.sub(pre_kin, t)
 
     def kin_poss(m):
         toks = clean_name_seq(m.group(1))

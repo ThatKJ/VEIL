@@ -270,7 +270,8 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         new_mon = _MON_FULL[n.month - 1]
         if len(name.rstrip(".")) <= 4:
             new_mon = new_mon[:3] + ("." if name.endswith(".") else "")
-        return w(f"{new_mon} {n.day}{_ord(n.day) if m.group(4) else ''}, {n.year}")
+        comma = "," if "," in m.group(0) else ""
+        return w(f"{new_mon} {n.day}{_ord(n.day) if m.group(4) else ''}{comma} {n.year}")
 
     def hid(m):
         d = _mk(int(m.group(3).translate(_INDIC_DIGITS)), _HI_MON[m.group(2)], int(m.group(1).translate(_INDIC_DIGITS)))
@@ -379,7 +380,7 @@ RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|डॉ\.?|डा\.)\s*(?:[A-Z][a-zA
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"
 STOP_WORDS = {"age", "sex", "uhid", "ipd", "opd", "mobile", "address", "dob", "date", "ward", "bed", "dr", "dr.",
-              "consultant", "diagnosis", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र", "उमर", "उमिर",
+              "consultant", "diagnosis", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र", "उमर", "उमिर", "वय",
               "लिंग", "पता", "ग्राम", "तारीख", "मोबाइल", "patient", "name", "hospital", "rx", "adv", "tab", "inj",
               "the", "and", "of", "on", "at", "in", "for", "with", "to", "is", "was", "no", "not", "nil", "na", "n/a",
               "phone", "tehsil", "distt", "district", "village", "pin", "reg", "attendant", "informed", "ka", "ki",

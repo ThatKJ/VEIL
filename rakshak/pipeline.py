@@ -14,13 +14,13 @@ from pathlib import Path
 
 from . import lexicon as L
 from . import privacy as P
-from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_EMAIL, RX_IDTOK, RX_PAN, _INDIC_DIGITS, Harvest, Rec, age_of,
-                     classify_digits, date_votes, decode, gender_of, id_digits_ok, looks_binary, norm, opaque,
+from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK, RX_PAN, _INDIC_DIGITS, Harvest, Rec,
+                     age_of, classify_digits, date_votes, decode, gender_of, id_digits_ok, looks_binary, norm, opaque,
                      parse_date, pseudonym, shift_dates_in, sniff_delim, sniff_kind)
 from .linker import Linker
-from .scrub import NAME_VALUE
-from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_VILL, Ctx, Sweeper,
-                    _name_ok, generalize_address, scrub_text)
+from .scrub import NAME_VALUE, Masker
+from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_PRE_KIN, RX_VILL, Ctx,
+                    Sweeper, _name_ok, generalize_address, scrub_text)
 from .engine import clean_name_seq, DOB_RX, COMMON_WORDS
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
@@ -32,7 +32,7 @@ STRUCT_KEYS = {"resourceType", "id", "fullUrl", "reference", "system", "url", "p
                "loinc", "interpretation", "category", "intent", "priority", "valueQuantity", "comparator"}
 GENDER_TOK = {"gender", "sex", "sx", "ling", "लिंग"}
 DISTRICT_TOK = {"district", "distt", "jila", "jillo", "जिला", "ज़िला", "zila", "janpad"}
-TEHSIL_TOK = {"tehsil", "तहसील", "तह", "taluka", "taluko", "block"}
+TEHSIL_TOK = {"tehsil", "तहसील", "तह", "taluka", "taluko", "block", "ta"}
 
 
 class Stats(dict):
@@ -72,7 +72,7 @@ class FileJob:
 # ================================================================ field kinds
 def kind_of_key(key: str) -> str | None:
     toks = L.key_tokens(key)
-    if any(t in ("age", "umar", "umra", "आयु", "उम्र") for t in toks) and L.classify_key(key) not in ("DOB", "DATE"):
+    if any(t in ("age", "umar", "umra", "आयु", "उम्र", "yr", "yrs", "vaya", "वय") for t in toks) and L.classify_key(key) not in ("DOB", "DATE"):
         return "AGE"
     return L.classify_key(key)
 
@@ -238,6 +238,13 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         toks = clean_name_seq(m.group(2))
         if _name_ok(toks):
             H.add_name(" ".join(toks))
+    if not first_label:
+        for m in RX_PRE_KIN.finditer(text):
+            toks = clean_name_seq(m.group(1))
+            if _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
+                H.add_name(" ".join(toks))
+                first_label = toks
+                break
     if first_label:
         e["names"].append(first_label)
         rec.is_patient = True
@@ -372,7 +379,8 @@ def _row_dict(header, row) -> dict:
     return {str(h): row[i] for i, h in enumerate(header) if i < len(row)}
 
 
-_NON_PATIENT_KEYS = {"result", "unit", "range", "dose", "dosage", "frequency", "price", "rate", "amount", "tariff"}
+_NON_PATIENT_KEYS = {"result", "results", "tests", "panels", "loinc", "unit", "range", "dose", "dosage", "frequency",
+                     "price", "rate", "amount", "tariff", "items", "medications", "drugs", "diagnoses"}
 
 
 def _patient_list(v) -> bool:
@@ -802,14 +810,24 @@ class Rewriter:
         if kind == "VILLAGE":
             st["identifiers"] += 1
             st["generalized"] += 1
+            if ctx.rule is not None and ctx.rule.dist == "drop":
+                return "[VILLAGE]"
             dist = rec.ev.get("district") if rec else None
             return dist or "[VILLAGE]"
         if kind == "ADDRESS":
             st["identifiers"] += 1
+            if ctx.rule is not None and ctx.rule.dist == "drop":
+                return "[ADDRESS]"
             return generalize_address(s)
         if kind == "TEHSIL" and (ctx.rule is None or ctx.rule.tehsil == "drop"):
             st["generalized"] += 1
+            if ctx.rule is not None and ctx.rule.dist == "drop":
+                return "[TEHSIL]"
             return (rec.ev.get("district") if rec else None) or "[TEHSIL]"
+        if kind == "DISTRICT" and ctx.rule is not None and ctx.rule.dist == "drop":
+            st["identifiers"] += 1
+            st["generalized"] += 1
+            return "[DISTRICT]"
         if kind in ("DISTRICT", "TEHSIL", "GENDER"):
             return scrub_text(s, ctx, self.sw) if re.search(r"\d{3}|[A-Z][a-z]+\s+[A-Z][a-z]+", s) else s
         if kind == "NAME_SHAPE":
@@ -845,8 +863,13 @@ class Rewriter:
             base = rk if rk else kind
             ext_kind = ext_value_kind(obj)
             out, seen = {}, set()
+            is_fhir_patient = rt == "Patient"
             for k, v in obj.items():
                 ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
+                if is_fhir_patient and k == "birthDate" and ctx.rule is not None and ctx.rule.dob == "year_drop":
+                    self.st["identifiers"] += 1
+                    self.st["generalized"] += 1
+                    continue
                 toks = set(L.key_tokens(k))
                 if toks & GENDER_TOK and not isinstance(v, (dict, list)) and ck != "AGE":
                     ck = "GENDER"
@@ -988,6 +1011,8 @@ def build_verify_index(crit: list[str]) -> tuple[list[str], dict[str, list[str]]
 def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, list[str]]] | None = None) -> tuple[str, int]:
     """Exact-substring check of critical harvested values on the NFKC/casefold view; masks any survivor."""
     hits = 0
+    M = Masker()
+    text = RX_DOCTOR.sub(lambda m: M.put(m.group(0)), text)
     low = text.casefold()
     if index is not None:
         fallback, by_tok = index
@@ -1010,7 +1035,7 @@ def verify_text(text: str, crit: list[str], index: tuple[list[str], dict[str, li
                 hits += 1
                 idx = j + 10
             low = text.casefold()
-    return text, hits
+    return M.restore(text), hits
 
 
 # ================================================================ time budget (fail-safe against pathological inputs)
@@ -1160,7 +1185,8 @@ def run(inp: Path, out: Path, policy: dict) -> int:
             days = P.days_for(rec.key, maxd)
             band = plan.band_fn(rec.key)
             return Ctx(H, rec.pid, days, job.order, band, st, plan.rule(rec.key))
-        return Ctx(H, None, 0, job.order, plan.band_fn(None), st, plan.default)
+        days = P.days_for(f"{job.rel}#{rec.loc}" if rec is not None else job.rel, maxd)
+        return Ctx(H, None, days, job.order, plan.band_fn(None), st, plan.default)
 
     # ---- output names
     san = out / "sanitized"

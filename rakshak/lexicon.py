@@ -153,8 +153,8 @@ FIELD_RULES = [
     ("NAME", r"name|naam|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|patient|pt|beneficiary|insured|rogi|dardi|daradi|client|"
              r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
-    ("AGE", r"age|umar|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs"),
-    ("VILLAGE", r"village|gaon|gaanv|gam|gram|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
+    ("AGE", r"age|umar|umra|umir|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
+    ("VILLAGE", r"village|gaon|gaanv|gam|gram|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
     ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना"),
     ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|दाखला|रिलीज़|सुट्टी"),
