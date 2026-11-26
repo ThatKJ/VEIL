@@ -148,6 +148,7 @@ def _plan(groups, policy) -> Plan:
     rules, why = {}, Counter()
     cells5 = Counter(cell(p, base_band, True) for p in profiles.values())
     cells5n = Counter(cell(p, base_band, False) for p in profiles.values())
+    cells5nd = Counter(cell(p, base_band, False, with_dist=False) for p in profiles.values())
     cells10 = Counter(cell(p, 10, False) for p in profiles.values())
     for key, p in profiles.items():
         rare = any(cond_count[c] <= rare_max for c in p["conds"])
@@ -159,6 +160,8 @@ def _plan(groups, policy) -> Plan:
             continue                                  # already hidden in a crowd: keep the useful values
         elif cells5n[cell(p, base_band, False)] >= k_min:
             rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_birth")
+        elif k5_dist and cells5nd[cell(p, base_band, False, with_dist=False)] >= k_min:
+            rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", dist=rare_dist, reason="k_dist")
         elif cells10[cell(p, 10, False)] >= k_min:
             rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist=(rare_dist if k5_dist else "keep"), reason="k_band")
         elif cells10[cell(p, 10, False)] >= 2:

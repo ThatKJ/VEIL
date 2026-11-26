@@ -211,7 +211,7 @@ class Sweeper:
         dev_full = sorted({n for n in H.full_names if re.search(rf"[{DEVA}]", n)}, key=len, reverse=True)
         lat_tok = sorted({t for t in H.name_tokens if not re.search(rf"[{DEVA}]", t)}, key=len, reverse=True)
         dev_tok = sorted({t for t in H.name_tokens if re.search(rf"[{DEVA}]", t)}, key=len, reverse=True)
-        sep = r"[\s_.\-]+"
+        sep = r"[\s_.\-^]+"
 
         def alt(items, f=lambda x: x):
             return "|".join(f(i) for i in items) or r"(?!x)x"
@@ -283,8 +283,8 @@ RX_LANDMARK = re.compile(rf"(?i)\b(?:near|opp\.?|opposite|behind|beside|in\s+fro
                          rf"|[{DEVA}]+(?:\s+[{DEVA}]+){{0,2}}(?:जवळ|समोर|मागे)")
 RX_VILL = re.compile(rf"(?i)\b(?:Vill\.?|Village|Gram|Gaon|Gam|Mu\.?\s*Po\.?|Mukkam|Ta\.|Taluka)(?![A-Za-z])[ \t]*[:\-.]?[ \t]*([A-Z][\w]*(?:[ \t]+[A-Z][\w]*){{0,2}})|(?:ग्राम|गाँव|गांव|गाम|पिंड)[ \t]*[:\-]?[ \t]*([{DEVA}]+(?:[ \t]+[{DEVA}]+){{0,2}})|\b([A-Z][a-z]{{3,}}(?:\s+[A-Z][a-z]{{3,}})?)\s+Post\b")
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[\"']?\s*[:\-=]?\s*[\"']?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-\"'(])([1-8]\d{2})\s?(\d{3})(?=[\"'\s),;\]}\n]|$)")
-RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
-                    rf"|(?<![\w.x×])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
+RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bAge\s*/\s*Gender|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*)(-?[{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|साल|saal|sal|/\s*[MFmf])?)"
+                    rf"|(?<![\w.x×\-])([{INDIC_DIG}]{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
 RX_URL = re.compile(r"(?i)\b(?:https?://|wa\.me/)[^\s\"'<>,;)]+|\btel:[+\d()\- ]{5,22}\d|\burn:(?:uuid|oid):[\w.\-]+")
 RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|y|वर्ष|साल|saal|sal|vayas\w*|prayam)\b\.?(?:\s*old)?)(?=\s*[,/|;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|purushan|stree|sthree|पुरुष|महिला|$|,|\||/|\)|;))")
 RX_PRE_KIN = re.compile(rf"(?i)(?:^|(?<=[\n,;|(\[]))\s*({NAME_SEQ}),\s*(?=(?:S/O|D/O|W/O|H/O|S\.O\.|D\.O\.|W\.O\.|Son\s+of|Daughter\s+of|Wife\s+of|Husband\s+of)\b)")
@@ -326,9 +326,10 @@ RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}}
                           rf"signed|left|arrived|requested|collected|took|stayed|attended|enquired)\b")
 NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{1,3}})")
 RX_ID_LABEL = re.compile(r"(?i)\b(?:UHID|MRN|MR\s*No|CR\s*No|Reg(?:istration)?\.?\s*(?:No|Number|#)|IP\s*No|IPD\s*No|OPD\s*No|"
-                         r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Record\s*No|File\s*No|"
+                         r"Patient\s*ID|Pt\.?\s*ID|Hospital\s*No|Case\s*No|Admission\s*No|Bharti\s*(?:No\.?|Number|#)|भर्ती\s*(?:सं\.?|नं\.?)|Record\s*No|File\s*No|"
                          r"पंजीकरण\s*(?:संख्या|सं\.?|नं\.?)|पंजीयन\s*(?:संख्या|सं\.?)|UID|Aadhaar|Aadhar|ABHA|"
                          r"Ration(?:\s*Card)?|KASP|Chirayu|PPP\s*(?:ID|No))\s*[:#.\-]?\s*([A-Za-z]{0,6}[\s/\-]?\d[\w/\-.]*(?:\s\d[\w/\-.]*){0,3})")
+_RX_PT_PROSE = re.compile(r"\bPatient\s+([A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20}){1,2})\b")
 RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|caller|wife|husband|son|daughter|father|"
                           rf"mother|brother|sister|guardian|neighbour|friend|raahgir|rahgir|padosi|padosan|rishtedaar|rishtedar|mitra|dost|saathi|"
                           rf"gawah|beta|beti|bhai|behen|bahan|pati|patni|maa|pita|chacha|chachi|mama|mami|bua|nana|nani|dada|dadi|"
@@ -672,7 +673,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         toks = clean_name_seq(seq)
         if not toks:
             return m.group(0)
-        if rel.upper().startswith("C/O") and (L.COMPLAINT_WORDS.match(toks[0]) or toks[0][:1].islower()):
+        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
             return m.group(0)
         if not _name_ok(toks):
             return m.group(0)
@@ -711,6 +712,13 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(g) - m.start(0)] + put("[NAME]") + rest + m.group(0)[m.end(g) - m.start(0):]
     t = RX_CTX_NAME.sub(ctxname, t)
     t = RX_CONSENT.sub(ctxname, t)
+    def _pt_prose(m):
+        toks = m.group(1).split()
+        if not _name_ok(toks) or any(w.lower() in STOPW for w in toks):
+            return m.group(0)
+        st["identifiers"] += 1
+        return m.group(0)[:m.start(1) - m.start(0)] + put(ctx.patient_token)
+    t = _RX_PT_PROSE.sub(_pt_prose, t)
     t = RX_SIGN_PAREN.sub(lambda m: m.group(1) + put("[NAME]") + m.group(3) if _name_ok(m.group(2).split()) else m.group(0), t)
 
     def nverb(m):

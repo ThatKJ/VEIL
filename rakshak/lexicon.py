@@ -8,15 +8,16 @@ from functools import lru_cache
 import re
 import unicodedata
 
-DEVA = "\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B80-\u0DFF"
+DEVA = "\u0900-\u0DFF"
 
-# Map Bengali (+0x80), Gurmukhi (+0x100), Gujarati (+0x180), Tamil (+0x280), Telugu (+0x300),
-# Kannada (+0x380), and Malayalam (+0x400) codepoints to Devanagari
+# Map Bengali/Assamese (+0x80), Gurmukhi (+0x100), Gujarati (+0x180), Odia (+0x200),
+# Tamil (+0x280), Telugu (+0x300), Kannada (+0x380), and Malayalam (+0x400) codepoints to Devanagari
 # for unified transliteration and cross-script identity skeletons.
 _SCRIPT_SPECIAL = {
-    "\u09CE": "त्", "\u09DC": "ड़", "\u09DD": "ढ़", "\u09DF": "य",
+    "\u09CE": "त्", "\u09DC": "ड़", "\u09DD": "ढ़", "\u09DF": "य", "\u09F0": "र", "\u09F1": "व",
     "\u0A59": "ख़", "\u0A5A": "ग़", "\u0A5B": "ज़", "\u0A5C": "ड़", "\u0A5E": "फ़",
     "\u0A70": "ं", "\u0A71": "", "\u0A72": "इ", "\u0A73": "उ", "\u0A74": "ओ",
+    "\u0B5C": "ड़", "\u0B5D": "ढ़", "\u0B5F": "य", "\u0B71": "व",
     "\u0BFA": "", "\u0B83": "ः", "\u0BB3": "ल", "\u0BB4": "ल", "\u0BB1": "र",
     "\u0C31": "र", "\u0C33": "ल", "\u0CB1": "र", "\u0CB3": "ल", "\u0CDE": "फ",
     "\u0D29": "न", "\u0D31": "र", "\u0D33": "ल", "\u0D34": "ल", "\u0D3A": "ट",
@@ -38,6 +39,8 @@ def _to_deva(s: str) -> str:
             out.append(chr(o - 0x0100))
         elif 0x0A80 <= o <= 0x0AFF:
             out.append(chr(o - 0x0180))
+        elif 0x0B00 <= o <= 0x0B7F:
+            out.append(chr(o - 0x0200))
         elif 0x0B80 <= o <= 0x0BFF:
             out.append(chr(o - 0x0280))
         elif 0x0C00 <= o <= 0x0C7F:
@@ -131,10 +134,13 @@ def skel(token: str) -> str:
 HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|dadi|aaji|babu|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|garu|anna|akka|banna|hukum|bhaisa|apa|मैडम|जी|साहब|दीदी|भाई|बहन)"
 HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्रीमान|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?|सौ\.?|कै\.?|बीबी|रोगी|मरीज़|मरीज|রোগী)"
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
-                       "prasad", "singh", "kaur", "shri", "shriman", "smt", "sahab", "saheb", "didi", "bhai", "ben",
+                       "prasad", "singh", "kaur", "shri", "shriman", "sri", "smt", "mr", "mrs", "ms", "miss",
+                       "master", "km", "sr", "kr", "sahab", "saheb", "didi", "bhai", "ben",
                        "kaka", "paaji", "bhau", "tai", "dada", "aaji", "babu", "chacha", "chachaji", "babuji",
                        "bhaiya", "amma", "garu", "anna", "akka", "sir", "banna", "hukum", "bhaisa", "da", "di", "apa",
-                       "देवी", "कुमार", "कुमारी", "जी", "श्री", "श्रीमान", "श्रीमती", "बीबी"}
+                       "khura", "khuri", "putek", "ghoini", "jiek", "jiyek", "baideu", "baaideo", "bhonti",
+                       "moshai", "mosha", "sardar", "sardarni",
+                       "देवी", "कुमार", "कुमारी", "जी", "श्री", "श्रीमान", "श्रीमती", "बीबी", "पुतेक", "सरदार", "सरदारनी"}
 SURNAME_GENERICS = {"devi", "kumar", "kumari", "begum", "bibi", "bai", "singh", "kaur", "lal", "ram", "prasad",
                     "देवी", "कुमार", "कुमारी", "बीबी"}
 
@@ -158,7 +164,7 @@ FIELD_RULES = [
     ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|phon|telecom|भ्रमणध्वनी"),
     ("FAMILY_ID", r"ration\w*|bpl\w*|familyid|kasp\w*|chirayu\w*|ppp\w*"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
-    ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opipno|opip|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|crn|crno|"
+    ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opipno|opip|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|bhartino|bhartinum|bhartiid|crn|crno|"
             r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
     ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|janana|jananam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
@@ -183,7 +189,7 @@ FIELD_RULES = [
     ("AGE", r"age|umar|umr|umra|umir|vayassu|vayasu|prayam|boyos|boyosh|bayas|bayos|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
     ("VILLAGE", r"village|gaon|gaanv|gam|gram|graan|garan|ooru|desam|desham|taluk|thaluk|panchayat\w*|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
     ("ADDRESS", r"address\w*|addr|street|house|hno|houseno|door|doorno|melvilasam|vilasam|vilaasa|vilasa|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna"),
-    ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admission|admitted|discharged|collected|registered|on|"
+    ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|bharti|chhutti|raja|din|aail|admission|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
 FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]

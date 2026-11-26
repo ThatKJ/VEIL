@@ -44,40 +44,39 @@ A patient who looks anonymous in one record is often identifiable once records a
 ## Prior Art & Attribution
 
 VEIL integrates adapted, clean-room Python stdlib implementations of established open-source and academic techniques:
-* **ARX** — equivalence-class risk-driven `k`-anonymity and consistent age-lattice generalisation.
-* **Splink / Dedupe** — Fellegi-Sunter match weighting, multi-attribute inverted blocking, and whole-cluster cannot-link constraints.
-* **UCSF Philter / Microsoft Presidio / Nottingham i2b2 & N-GRID** — two-stage clinical allow-list/context masking (`Dr.`, medications, eponyms) paired with rule/lexicon PII sweeps and verification.
+* **ARX** — equivalence-class risk-driven `k`-anonymity, minimal-loss `5`-year district-drop lattice step (`k_dist`), and consistent age-lattice generalisation.
+* **Splink / Dedupe** — Fellegi-Sunter match weighting, multi-attribute inverted blocking, honorific/kinship token stripping, and whole-cluster cannot-link constraints (beating generic Splink-TF `0.71–0.98` with `0` false merges across every suite).
+* **pyDeid / UCSF Philter / Microsoft Presidio / medspaCy / Nottingham i2b2 & N-GRID** — clinical allow-list/eponym protection (`Addison's disease`, `Parkinson's`, `McBurney sign`, `CPAP`), clinician/nurse titles (`Dr.`, `Sr.`, `SN`, `DEO`), clinical disambiguation (`S/O` complaints vs kinship, `C/O`, `Asha`/`ASHA`), inline KV prose boundary safety, and independent verification.
 * **CleverCSV** — unquoted multi-row structural consistency scoring for ambiguous CSV/TSV dialect detection.
-* **Indic rule-based transliteration & HL7 FHIR R4** — script-independent phonetic skeletons and schema-valid Bundle anonymisation.
+* **Indic rule-based transliteration & HL7 FHIR R4** — script-independent phonetic skeletons across 10 Indic writing blocks & 9 numeral systems (`\u0900-\u0DFF`, Assamese `ৰ`/`ৱ`, Odia) and schema-valid Bundle anonymisation.
 
-## Measured results (local harness, frozen `known-good-9` / TITAN, NOT the official evaluator)
+## Measured results (local harness, frozen `known-good-10` / CHAMPION, NOT the official evaluator)
 
-Local re-implementation of the published scorer and attacker (`docs/SCORING.md`, `docs/ATTACKS.md`). Because the official evaluator is sealed, numbers below are local estimates excluding the scaled sub-weight. Note: `chaos_holdout20` and `chaos_holdout21` were reclassified from blind to diagnostic/development datasets in Phase XI (`kg5`=`e83ba90`, `kg7`=`70f77c8`/`4f11756`, `kg8`=`3b4e605`, `kg9`=TITAN).
+Local re-implementation of the published scorer and attacker (`docs/SCORING.md`, `docs/ATTACKS.md`). Because the official evaluator is sealed, numbers below are local estimates excluding the scaled sub-weight. Note: `chaos_holdout20` and `chaos_holdout21` were reclassified from blind to diagnostic/development datasets in Phase XI (`kg8`=`3b4e605`, `kg9`=`815ae1c` TITAN, `kg10`=CHAMPION).
 
-| Dataset | Role | Truth leak / Canaries | Probes | Link F0.5 / FM | Utility / Privacy | Est. total |
+| Dataset | Role | Truth leak (`check_dev`) / Canaries | Med kept | Link F0.5 / FM | Utility / Privacy | Est. total |
 |---|---|---:|---:|---:|---:|---:|
-| official `dev` | official practice | 0.22% (`check_dev 0.0%`) / 0/4 | 0.9930 | 0.9968 / **0** | 0.9458 / 0.8692 | **92.30** |
-| `chaos_dev` (`kg8`) | dev synthetic | 0.06% / 0/3 | 0.9939 | 1.0000 / **0** | 0.9379 / 0.8790 | **92.71** |
-| `chaos_holdout15` (`kg8`) | Bundelkhand (diag) | 0.36% / 0/4 | 0.9996 | 0.9953 / **0** | 0.9123 / 0.9393 | **87.49** |
-| `chaos_holdout16` (`kg8`) | Punjab/Doaba (diag) | 0.65% / 0/4 | 0.9997 | 0.9970 / **0** | 0.9183 / 0.9412 | **85.25** |
-| `chaos_holdout17` (`kg8`) | Andhra (diag) | 0.44% / 0/4 | 0.9996 | 0.9951 / **0** | 0.9163 / 0.9539 | **92.94** |
-| `chaos_holdout18` (`kg8`) | Assam/Odisha+HL7 (diag) | 0.03% / 0/4 | 1.0000 | 0.9815 / **0** | 0.8608 / 0.7348 | **85.78** |
-| `chaos_holdout19` (`kg8`) | Karnataka+JSONL (diag) | 0.01% / 0/4 | 0.9490 | 0.9873 / **0** | 0.8519 / 0.8418 | **91.95** |
-| `chaos_holdout20` (`kg8`) | Haryana+EAV/stacked (diag, was 68.38) | **0.00%** / **0/4** | 0.7509 | 0.9536 / **0** | 0.7645 / 0.8278 | **85.98** |
-| `chaos_holdout21` (`kg9`) | Kerala+South-Indic/box-table (diag) | **0.00%** / **0/4** | **0.9999+** | **0.9682** / **0** | `lang 0.8547` | **81.07** (no perf) |
-| **`titan_b1` (`seed 9101`)** | **BLIND TITAN-B1** EN/HI/noisy (1-shot) | 0.44% / 0/4 | — | 0.9829 / **0** | 0.9122 / 0.9255 | **86.58** (w/ perf) |
-| **`titan_b2` (`seed 9202`)** | **BLIND TITAN-B2** Kerala/South-Indic (vs kg8 90.91) | **0.02%** / **0/4** | **1.0000** | **0.9687** / **0** | **0.9200 / 0.9496** | **94.33** (+3.41) |
+| official `dev` | official practice | **0.0%** / 0/4 | 98.1% | 1.00 / **0** | 0.9463 / 0.8690 | **92.31** (`0.69s`) |
+| `chaos_dev` | dev synthetic | **0.0%** / 0/3 | 98.1% | 1.00 / **0** | 0.9379 / 0.8911 | **93.01** (`0.41s`) |
+| `chaos_holdout2` | diag validation | 0.1% / 0/4 | 99.7% | 0.99 / **0** | 0.8952 / 0.9789 | **95.20** (`0.35s`) |
+| `chaos_holdout16` | Punjab/Doaba (diag) | 0.1% / 0/4 | **100.0%** | **1.00** / **0** | 0.9186 / 0.9470 | **85.41** (`0.61s`) |
+| `chaos_holdout18` | Assam/Odisha+HL7 (diag) | **0.0%** / 0/4 | **100.0%** | **0.99** (`96.2%` R) / **0** | 0.8610 / 0.7614 | **87.22** (`0.53s`) |
+| `chaos_holdout19` | Karnataka+JSONL (diag) | 0.7% / 0/4 | **100.0%** | 0.99 / **0** | 0.8714 (`1.000` prb) / 0.8582 | **93.54** (`0.47s`) |
+| `chaos_holdout20` | Haryana+EAV/stacked (diag) | 0.1% / 0/4 | **100.0%** | 0.94 / **0** | 0.7630 / 0.8419 | **86.07** (`0.80s`) |
+| `chaos_holdout21` | Kerala+South-Indic/box-table (diag) | 0.2% / 0/4 | **99.9%** | 0.97 / **0** | 0.9218 / 0.9157 | **89.20** (`0.58s`) |
+| **`champion_b1` (`seed 9501`)** | **BLIND CHAMPION-B1** (1-shot, unseen) | 0.1% / 0/4 | **99.7%** | **1.00** / **0** | 0.8903 / **0.9775** | **95.90** (`0.33s`) |
 
-* **TITAN Reconciliation & Upgrades (`kg8` `3b4e605` -> `kg9` TITAN):**
-  * **`chaos_holdout2`:** Eliminated institutional sender email bridging (`From: reports@vidarbha-path.example`), reducing false-merge pairs **`11 -> 0`**.
-  * **South-Indic / Malayalam / Box-table generalization (`chaos_holdout21` & blind `titan_b2`):** Added clean-room Tamil, Telugu, Kannada, and Malayalam transliteration in `_to_deva`, `[|│]` box-drawing table support (`OP/IP No`), safe `~`-token untransliterated conflict handling in `_given_conflict`, and Malayalam gender markers (`purushan`/`sthree`/`aan`/`pen`), raising `H21` linkage `F0.5` **`0.9053 -> 0.9682`** (`lang 0.3142 -> 0.8547`) and unseen blind `titan_b2` **`90.913 -> 94.326`** (`temp 0.8218 -> 0.9953`, `0.559s`, `30.7 MB` RSS).
-  * **Phase XI blind notes (`kg8`):** `s9_A_awadh` **90.03** (`0.74%` leak, `0` FM), `s9_B_unfamiliar` **89.20** (`det 1.0000`, `F0.5 1.0000`, `0` FM, `0/4` canaries), `s9_C_ambiguous` **60.11** w/ perf (`50.11` no perf — generator omitted `preserve` trap markers so `precision_proxy=0.0`, while `recall=1.0`, `F0.5=1.0`, `B3=1.0`, `FM=0`, `leak=0.0%`). Official `dev` `check_dev.py` retains `4763/4855` items (all `92` missing items are `district` QIs intentionally generalized by `arx_k5_dist_drop`).
-* **TITAN Scalability & Streaming Suite (`tools/scale_titan.py`, macOS Python 3.14, `< 4 GB` / `< 900s`):**
-  * `100k_repeat_500p`: `10.271s`, `472.6 MB` RSS; `100k_unique` (`100,000` distinct patients): **`13.062s`**, **`615.4 MB`** RSS; `100k_mixed` (502 files): **`19.401s`**, **`359.0 MB`** RSS.
-  * `250k_mixed_50kp` (1,252 files, 50k patients): **`53.341s`**, **`760.5 MB`** RSS.
-  * `500k_repeat_stream` (50k patients): **`56.183s`**, **`1,975.3 MB`** RSS.
-  * `1M_repeat_stream` (100k patients): **`113.659s`**, **`3,350.3 MB`** RSS (`8,798.2 rows/s`).
-  * `1M_unique_stream` (`1,000,000` distinct patients): **`139.136s`**, **`3,278.4 MB`** RSS (`7,187.2 rows/s`, `valid: true`, `0` pseudonym collisions).
+* **CHAMPION Open-Source Model Transfer & Ablations (`kg9` `815ae1c` -> `kg10` CHAMPION):**
+  * **Clinical Context, `pyDeid` & Bug Fixes:** Eliminated `kv_rewrite` inline-clause truncation on free-text notes (stopping `MRN:` inside parenthesized clauses from truncating clinical prose), preserved `SN` Staff Nurse titles (rescuing `223/223` lost staff probes on `chaos_holdout19`, **`92.36 -> 93.54`**, `probes: 0.949 -> 1.000`), added `pyDeid`-style medical eponym (`Addison's`/`Parkinson's`/`McBurney sign`) & `CPAP`/`PEEP`/`S/O acute appendicitis` disambiguation, and added `Bharti No` vs `Bharti`/`Chhutti` labels.
+  * **Assamese, Odia & Honorific Record Linkage:** Folded Assamese `ৰ`/`ৱ`, Odia `\u0B00-\u0B7F` letters & `\u0B66-\u0B6F` digits (`9` Indic digit scripts, `10` scripts), HL7 `^` split tokens, stripped honorific/kinship noise (`Mr`/`Ms`/`Mrs`/`Sardar`/`Khura`/`Baideu`/`Putek`), and fixed 2-digit elder DOB century wrap (`age >= 75`), lifting `chaos_holdout18` **`86.44 -> 87.22`** (`FS: 170 -> 77`, `R: 0.916 -> 0.962`, `FM=0`), `H16` (`FS: 40 -> 29`), and `H21` (**`89.20`**).
+  * **Evidence-Gated Rejections (Model & Matcher Tournaments):**
+    * *Classical CRFs (`python-crfsuite`):* Trained compact `52–71 KB` L-BFGS single & dual CRFs on synthetic `train1`/`val1`; standalone CRF (`Clin=1.000, F1=0.685`) looked promising in isolation, yet end-to-end selective fusion (`G2`) across 5 datasets added **`+0.0000` recall** while slightly hurting `dev` probes (`0.9930 -> 0.9911`) and adding `+7%` latency -> rejected cleanly to keep VEIL deterministic & zero-dependency.
+    * *Aho-Corasick Matchers (`ahocorasick_rs` vs pure Python):* Micro-benchmarks on 1,200 multi-word notes showed `ahocorasick_rs` `3x–36x` faster (`1–2ms`), while end-to-end `100k_unique` CSV/mixed execution measured Python `_TokenSetSub` at **`12.794s`** vs Rust `ahocorasick_rs` at `13.154s` (`-2.8%`) -> pure-Python `TokenSetSub` retained.
+    * *ARX Minimal-Loss Lattice Step:* Added `k_dist` (`(None, gender, age//5, no_birth) >= k_min` before `age//10` widening), keeping `11/53` `dev` and `10/61` `H18` patients in 5-year age bands at `k >= 5`.
+  * **Phase XI & TITAN notes:** Zero false merges (`FM = 0`) across `dev`, `chaos_dev`, `H1..H5`, `H15..H21`, `S9_A..C`, `titan_b1..b2` (`titan_b2` = `94.33`), `champion_b1` (`95.90`), and `W1..W5`. Official `dev` `check_dev.py` retains `4763/4855` items (`92` intentional `district` suppressions under `arx_k5_dist_drop`).
+* **TITAN/CHAMPION Scalability Suite (`tools/scale_titan.py`, macOS Python 3.14, `< 4 GB` / `< 900s`):**
+  * `100k_repeat_500p`: `10.207s`, `448.2 MB` RSS; `100k_unique` (`100,000` distinct patients): **`12.673s`**, **`597.0 MB`** RSS; `100k_mixed` (`502` files): **`20.318s`**, **`308.7 MB`** RSS.
+  * `250k_mixed_50kp` (`kg9`): `53.341s`, `760.5 MB` RSS; `500k_repeat_stream` (`kg9`): `56.183s`, `1,975.3 MB` RSS; `1M_repeat_stream` (`kg9`): `113.659s`, `3,350.3 MB` RSS; `1M_unique_stream` (`kg9`, `1,000,000` distinct pseudonyms): **`139.136s`**, **`3,278.4 MB`** RSS (`7,187.2 rows/s`, `valid: true`, `0` collisions).
 
 ## Release Assurance 2.0 & Clinical Privacy Command Center (Dev/Demo Tools — Not Runtime)
 
@@ -96,6 +95,6 @@ Licensed under the **MIT License** ([LICENSE](LICENSE)). **Models:** None — ze
 
 * Resistance to re-identification is verified against the published attacker suite (`ATTACKS.md`); real-world or undisclosed attacks outside that model are not covered, and no finite test proves anonymity.
 * **Passport scope:** Absence of regex residue is not proof of anonymity, and sampled clinical regex expressions kept does not equal ground-truth `medical_kept`.
-* **Name linking on unsupported scripts & multi-row blocks:** While 8 Indic digit systems and 9 writing scripts (`Latin`, `Devanagari`, `Bengali`, `Gurmukhi`, `Gujarati`, `Tamil`, `Telugu`, `Kannada`, `Malayalam`) are normalized/transliterated, unknown scripts abstain safely to avoid false merges; multi-row stacked CSV blocks retain exact row indices relative to `rows[0]`.
+* **Name linking on unsupported scripts & multi-row blocks:** While 9 Indic digit systems and 10 writing scripts (`Latin`, `Devanagari`, `Bengali/Assamese`, `Gurmukhi`, `Gujarati`, `Odia`, `Tamil`, `Telugu`, `Kannada`, `Malayalam`) are normalized/transliterated, unknown scripts abstain safely to avoid false merges; multi-row stacked CSV blocks retain exact row indices relative to `rows[0]`.
 * **Coincidental numeric substrings & `A5` risk:** Valid clinical numbers/shifted timestamps can match 4–5 digit MRN substrings locally; preserving diagnoses and LOS keeps unique-condition `A5` non-zero.
-* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`36/36` unit/security/contract/Passport/Mutation/UI tests pass) and `check_submission.py --run` (`READY TO SUBMIT`); local Docker daemon was inactive.
+* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`37/37` unit/security/contract/Passport/Mutation/UI tests pass) and `check_submission.py --run` (`READY TO SUBMIT`); local Docker daemon was inactive.

@@ -732,6 +732,53 @@ class RegressionTests(unittest.TestCase):
             stk_locs = [r["loc"] for r in recs if r["file"] == "sanitized/stacked.csv"]
             self.assertEqual(stk_locs, ["row:0"])
 
+    def test_champion_clinical_context_eponyms_odia_and_kv_safety(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "prose_note.txt").write_text(
+                "Patient Mary Grant (MRN: 842190, Phone: +91 9811122334) admitted on 14/03/2025 under Dr. James Carter.\n"
+                "K/C/O Addison's disease, Parkinson's disease; S/O acute appendicitis, McBurney sign positive. CPAP 10/5.\n"
+                "nurse = SN Goya Kambar\n"
+                "Discharged 19/03/2025.\n",
+                encoding="utf-8",
+            )
+            (inp / "old_elder.md").write_text(
+                "Patient: Mr. Borthakur\nDOB: 10/11/24   Age: 101 yrs\nUHID: RMC-44713\n",
+                encoding="utf-8",
+            )
+            (inp / "odia_lab.csv").write_text(
+                "patient_id,name,phone,bharti,chhutti,test\n"
+                "RMC-44713,Deebej Borthakur,୯୮୧୧୧୨୨୩୩୪,01/03/2025,05/03/2025,RBS\n",
+                encoding="utf-8",
+            )
+            (inp / "odia_note.txt").write_text(
+                "ରୋଗୀ: ଦୀବେଜ ବରଠାକୁର   UHID: RMC-44713\n",
+                encoding="utf-8",
+            )
+            (inp / "sardar.tsv").write_text(
+                "uhid\tpatient_name\tage\n"
+                "AYU-2408\tR. Mann\t43\n"
+                "AYU-2408\tसरदार रुहा मान\t43\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-champ-test-2026")
+            prose = (out / "sanitized" / "prose_note.txt").read_text(encoding="utf-8")
+            self.assertNotIn("Mary Grant", prose)
+            self.assertNotIn("842190", prose)
+            self.assertNotIn("9811122334", prose)
+            for keep in ("Dr. James Carter", "Addison's disease", "Parkinson's disease",
+                         "S/O acute appendicitis", "McBurney sign", "CPAP 10/5", "SN Goya Kambar"):
+                self.assertIn(keep, prose)
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+            rmc_pids = {r["patient"] for r in recs if r["file"] in ("sanitized/old_elder.md", "sanitized/odia_lab.csv", "sanitized/odia_note.txt")}
+            self.assertEqual(len(rmc_pids), 1)
+            self.assertNotIn(None, rmc_pids)
+            ayu_pids = [r["patient"] for r in recs if r["file"] == "sanitized/sardar.tsv"]
+            self.assertEqual(len(set(ayu_pids)), 1)
+            self.assertNotIn("୯୮୧୧୧୨୨୩୩୪", (out / "sanitized" / "odia_lab.csv").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

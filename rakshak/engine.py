@@ -175,10 +175,10 @@ def sniff_delim(text: str, ext: str) -> str:
 
 
 _INDIC_DIGITS = str.maketrans(
-    "०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯௦௧௨௩௪௫௬௭௮௯౦౧౨౩౪౫౬౭౮౯೦೧೨೩೪೫೬೭೮೯൦൧൨൩൪൫൬൭൮൯",
-    "0123456789" * 8,
+    "०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯୦୧୨୩୪୫୬୭୮୯௦௧௨௩௪௫௬௭௮௯౦౧౨౩౪౫౬౭౮౯೦೧೨೩೪೫೬೭೮೯൦൧൨൩൪൫൬൭൮൯",
+    "0123456789" * 9,
 )
-INDIC_DIG = "0-9०-९০-৯੦-੯૦-૯௦-௯౦-౯೦-೯൦-൯"
+INDIC_DIG = "0-9०-९০-৯੦-੯૦-૯୦-୯௦-௯౦-౯೦-೯൦-൯"
 
 # ============================================================== dates
 _MON = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
@@ -463,8 +463,10 @@ CLIN_PROTECT = [
     re.compile(r"(?i)\b(?:Ward|वार्ड)\s*\d+\s*\([^)]{2,30}\)"),
     re.compile(r"(?i)\bBed\s*(?:No\.?)?\s*\d+\b"),
     re.compile(r"\bASHA\b|(?i:\basha\s+(?:workers?|sahayika|facilitator))"),
+    re.compile(r"(?i)\b(?:CPAP|BiPAP|PEEP|CVP|ICP|PSV)\s*[:=]?\s*\d+(?:\s*/\s*\d+)?"),
+    re.compile(r"(?i)\b(?:Addison|Cushing|Parkinson|Hodgkin|Graves|Hashimoto|Raynaud|Bell|Alzheimer|Barrett|Crohn|Marfan|Foley|Ringer|Babinski|McBurney|Apgar|Glasgow|Kernig|Brudzinski|Trousseau|Chvostek|Murphy|Kocher)(?:'s)?\s+(?:disease|syndrome|catheter|lactate|sign|palsy|lymphoma|score|coma|test|reflex|maneuver|esophagitis|tract|point)\b"),
 ]
-RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSis\.|\bN/O|\bSister|\bStaff[ \t]+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)[ \t]*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:[ \t]+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
+RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSis\.|\bSN\.?|\bN/O|\bSister|\bStaff[ \t]+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)[ \t]*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:[ \t]+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
 
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"

@@ -288,7 +288,7 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
 
 
 RX_KV = re.compile(r"(?m)^([ \t]*[|│][ \t]*)([^|│\n]{1,40}?)([ \t]*[|│][ \t]*)([^|│\n]+?)([ \t]*[|│][ \t]*)$"
-                   r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:=\n|│]{0,30}?)(\**[ \t]*[:：=][ \t]*\**)([^\n]+?)([ \t]*)$")
+                   r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:=\n|│(),;\[\]]{0,30}?)(\**[ \t]*[:：=][ \t]*\**)([^\n]+?)([ \t]*)$")
 KV_KINDS = {"NAME", "REL_NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "FAMILY_ID", "DOB", "AGE",
             "VILLAGE", "ADDRESS", "PIN"}
 
@@ -338,7 +338,7 @@ def _kv_kind(label: str, value: str):
     return k if k in KV_KINDS else None
 
 
-_NEXT_LABEL = re.compile(r"\s{2,}(?=[^\s:：][^:：\n]{0,30}[:：])|\s+[-–]\s+(?=[A-Z])")
+_NEXT_LABEL = re.compile(r"(?:\s{2,}|,\s+)(?=[^\s:：][^:：\n]{0,24}[:：=])|\s+[-–]\s+(?=[A-Z])")
 
 
 def kv_rows(text):
@@ -348,11 +348,14 @@ def kv_rows(text):
         if m.group(2) is not None:
             yield m.group(2), m.group(4), m.start(4), m.end(4)
         else:
+            lab = m.group(7)
+            if len(lab.split()) > 3:
+                continue
             v = m.group(9)
             cut = _NEXT_LABEL.search(v)
             if cut:
                 v = v[:cut.start()]
-            yield m.group(7), v, m.start(9), m.start(9) + len(v)
+            yield lab, v, m.start(9), m.start(9) + len(v)
 
 
 RX_ICD = re.compile(r"\b([A-TV-Z]\d{2}(?:\.\d{1,2})?)\b")
@@ -456,7 +459,7 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         rel, toks = m.group(1), clean_name_seq(m.group(2))
         if not toks or not _name_ok(toks):
             continue
-        if rel.upper().startswith("C/O") and (L.COMPLAINT_WORDS.match(toks[0]) or toks[0][:1].islower()):
+        if rel.upper().startswith(("C/O", "S/O", "H/O")) and (L.COMPLAINT_WORDS.match(toks[0]) or (toks[0][:1].isascii() and toks[0][:1].islower())):
             continue
         H.add_name(" ".join(toks))
         e["rel"].append(toks)
@@ -1273,7 +1276,7 @@ class Rewriter:
         if kind in ("NAME", "REL_NAME") and _INLINE_KV_CELL.match(s):
             return scrub_text(kv_rewrite(s, self, ctx, rec), ctx, self.sw)
         if kind == "NAME":
-            if re.match(r"^(?:(?i:dr|sr|sis\.?|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+|(?:DEO|N/O)\s+)", s):
+            if re.match(r"^(?:(?i:dr|sr|sis\.?|sn\.?|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+|(?:DEO|N/O)\s+)", s):
                 return s
             st["identifiers"] += 1
             if (len(re.sub(r"\D", "", s)) >= 3 and "," not in s and len(s.split()) <= 2) or (
@@ -1522,8 +1525,12 @@ def kv_rewrite(text: str, rw, ctx, rec) -> str:
             continue
         if k == "DOB" and not (ctx.rule is not None and ctx.rule.dob == "year_drop"):
             continue
-        nv = rw.value(v.strip(" *"), k, ctx, rec)
-        if nv == v.strip(" *"):
+        vs = v.strip(" *")
+        # Never obliterate multi-clause narrative sentences after inline labels; let scrub_text handle spans cleanly.
+        if k in ("MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "PIN", "FAMILY_ID", "NAME", "REL_NAME") and len(vs.split()) > 5:
+            continue
+        nv = rw.value(vs, k, ctx, rec)
+        if nv == vs:
             continue
         out.append(text[last:a])
         out.append(str(nv))
@@ -1920,6 +1927,12 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if r.ev["dob"]:
             j_order = date_orders[r.file]
             d = parse_date(r.ev["dob"], j_order)
+            if d and r.ev.get("age") is not None and r.ev["age"] >= 75 and d.year >= 2000:
+                if (d.year - (2026 - r.ev["age"])) >= 90:
+                    try:
+                        d = d.replace(year=d.year - 100)
+                    except ValueError:
+                        d = d.replace(year=d.year - 100, day=28)
             r.ev["dob"] = d.isoformat() if d else None
     if str(policy.get("link", "on")) == "off":           # ablation only
         roots = list(range(len(recs)))

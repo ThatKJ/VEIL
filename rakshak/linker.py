@@ -34,6 +34,14 @@ _RX_VILL_SPLIT = re.compile(r"[\s,._\-]+")
 
 
 def name_keys(tokens: list[str]) -> tuple[str, ...]:
+    # Split any raw HL7 caret/underscore sub-tokens cleanly before phonetic skeleton folding.
+    flat: list[str] = []
+    for raw_t in tokens:
+        if "^" in raw_t or "_" in raw_t:
+            flat.extend(p for p in re.split(r"[\^_]+", raw_t) if p)
+        else:
+            flat.append(raw_t)
+    tokens = flat
     # Pre-count non-generic tokens >= 2 chars so surname-capable generics (e.g. Begum, Singh)
     # are dropped as middle titles ("Shanti Devi Verma") yet preserved when functioning as surname ("S.D. Begum").
     non_gen2 = 0
