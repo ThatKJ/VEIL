@@ -141,10 +141,11 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                             pp_res = json.loads(r.read().decode("utf-8"))
                         opt_pp_s = pp_res["passport_s"]
                         self.assertEqual(pp_res["passport_status"], "verified")
+                        self.assertEqual(pp_res["passport"]["verdict"], "PASS")
                         self.assertEqual(pp_res["passport"]["clinical"]["protected_values_kept_pct"], 100.0)
                         self.assertEqual(pp_res["passport"]["identity"]["pseudonym_placement_errors"], 0)
-                        real_leaks = {k: v for k, v in pp_res["passport"]["privacy"]["residual_pattern_hits"].items() if k != "PAN"}
-                        self.assertEqual(real_leaks, {})
+                        self.assertEqual(pp_res["passport"]["privacy"]["residual_pattern_hits"], {})
+                        self.assertEqual(pp_res["passport"]["privacy"]["files_with_residue"], 0)
 
                         if n_rows == 1000:
                             req_ar = urllib.request.Request(base + "/api/arena/run", method="POST", data=b"{}")
@@ -309,6 +310,23 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     self.assertTrue(page.is_hidden("#staged-summary-bar"))
                     self.assertTrue(page.is_disabled("#btn-run-uploaded"))
 
+                    # 1b. Select & run 64 files in Chromium
+                    b64_dir = f_dir / "batch64"
+                    b64_dir.mkdir()
+                    b64_paths = []
+                    for bi in range(64):
+                        fp = b64_dir / f"f_{bi:02d}.csv"
+                        fp.write_bytes(_make_csv_bytes(2, prefix=f"B{bi}"))
+                        b64_paths.append(str(fp))
+                    page.set_input_files("#file-input", b64_paths)
+                    self.assertIn("64 / 64 files", page.text_content("#staged-stats-text"))
+                    page.click("#btn-run-uploaded")
+                    page.wait_for_function(
+                        "document.getElementById('runner-log').textContent.includes('64/64 files sanitized')",
+                        timeout=30000,
+                    )
+                    page.click("#btn-clear-staged")
+
                     # 2. Upload 5,000-row CSV -> completes cleanly via single 1x engine execution!
                     page.set_input_files("#file-input", [str(csv_5k)])
                     self.assertIn("1 / 64 files", page.text_content("#staged-stats-text"))
@@ -343,20 +361,70 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     )
                     browser_graph_s = round(time.monotonic() - t_g0, 3)
 
-                    # 5. Verify Privacy Passport runs cleanly on demand and clears PENDING state
+                    # 5. Verify Privacy Passport runs cleanly on demand and reaches Verified PASS (0 false PAN hits!)
                     page.click('button[data-view="passport"]')
                     self.assertIn("VERIFICATION PENDING", page.text_content("#passport-banner"))
                     page.click("#btn-run-passport")
                     page.wait_for_function(
-                        "document.getElementById('status-pill').textContent !== 'Sanitized Ready · Audit Pending' && !document.getElementById('passport-banner').textContent.includes('VERIFICATION PENDING')",
+                        "document.getElementById('status-pill').textContent === 'Verified PASS'",
                         timeout=30000,
                     )
-                    self.assertIn(page.text_content("#status-pill"), ("Verified PASS", "Review Risks"))
                     self.assertIn("5000/5000", page.text_content("#passport-pillars"))
                     self.assertIn("pseudonym placement errors0", page.text_content("#passport-pillars").lower())
 
+                    # 6. Verify Privacy Arena on-demand & Inject Defect -> Detect -> Repair -> Reverify cycle
+                    page.click('button[data-view="arena"]')
+                    self.assertIn("On-Demand", page.text_content("#arena-status-badge"))
+                    page.click("#btn-run-arena")
+                    page.wait_for_function(
+                        "document.getElementById('arena-status-badge').textContent === 'Measured Live'",
+                        timeout=45000,
+                    )
+                    self.assertIn("VEIL Adaptive", page.text_content("#arena-table"))
+
+                    page.click('button[data-view="passport"]')
+                    page.click("#btn-corrupt-demo")
+                    page.wait_for_function(
+                        "document.getElementById('status-pill').textContent === 'Defect Caught!'",
+                        timeout=30000,
+                    )
+                    self.assertIn("SYNTHETIC DEFECT CAUGHT", page.text_content("#passport-banner"))
+                    page.click("#btn-repair-demo")
+                    page.wait_for_function(
+                        "document.getElementById('status-pill').textContent === 'Verified PASS'",
+                        timeout=30000,
+                    )
+
+                    # 7. Upload 10,000-row unique CSV & verify full ZIP + Passport Verified PASS
+                    csv_10k = f_dir / "hospital_10k.csv"
+                    csv_10k.write_bytes(_make_csv_bytes(10000, repeated=False, prefix="H10K"))
+                    page.click('button[data-view="runner"]')
+                    page.click("#btn-clear-staged")
+                    page.set_input_files("#file-input", [str(csv_10k)])
+                    t_10k0 = time.monotonic()
+                    page.click("#btn-run-uploaded")
+                    page.wait_for_function(
+                        "document.getElementById('runner-log').textContent.includes('10000 records')",
+                        timeout=30000,
+                    )
+                    browser_10k_ready_s = round(time.monotonic() - t_10k0, 3)
+
+                    with page.expect_download() as dl_info:
+                        page.click("#btn-download-zip")
+                    dl = dl_info.value
+                    with zipfile.ZipFile(dl.path(), "r") as zf:
+                        recs_10k = [ln for ln in zf.read("records.jsonl").decode("utf-8").splitlines() if ln.strip()]
+                        self.assertEqual(len(recs_10k), 10000)
+
+                    page.click('button[data-view="passport"]')
+                    page.click("#btn-run-passport")
+                    page.wait_for_function(
+                        "document.getElementById('status-pill').textContent === 'Verified PASS'",
+                        timeout=30000,
+                    )
+
                     print(
-                        f"\nPLAYWRIGHT_5K: upload_to_ready={browser_upload_to_ready_s}s, bounded_graph_render={browser_graph_s}s, console_errs={len(console_errors)}, page_errs={len(page_errors)}",
+                        f"\nPLAYWRIGHT_E2E: 5k_ready={browser_upload_to_ready_s}s, 10k_ready={browser_10k_ready_s}s, bounded_graph={browser_graph_s}s, console_errs={len(console_errors)}, page_errs={len(page_errors)}",
                         flush=True,
                     )
                     self.assertEqual(console_errors, [])
@@ -371,6 +439,117 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                 for pipe in (proc.stdout, proc.stderr):
                     if pipe is not None:
                         pipe.close()
+
+    def test_passport_pan_assigned_psn_context_positive_and_negative(self):
+        """Valid assigned PSNs matching PAN regex do not false-positive; adjacent/malformed/unassigned PANs fail."""
+        import veil_passport as VP
+
+        with tempfile.TemporaryDirectory(prefix="veil_pan_ctx_") as td:
+            root = Path(td)
+            inp, out = root / "in", root / "out"
+            inp.mkdir()
+            (out / "sanitized").mkdir(parents=True)
+            # Clean input note (clinical only so clinical=PASS/SKIPPED, identity checked precisely)
+            (inp / "note.txt").write_text("Diagnosis: Type 2 DM (E11.9)\nVitals: BP 120/80 mmHg\n", encoding="utf-8")
+            sha_in = hashlib.sha256((inp / "note.txt").read_bytes()).hexdigest()
+            psn_valid = "PSN-ABCDE1234F"  # matches PAN regex inside PSN token if unmasked!
+
+            def _write_release(san_text: str):
+                (out / "sanitized" / "note.txt").write_text(san_text, encoding="utf-8")
+                rec_line = json.dumps({"file": "sanitized/note.txt", "loc": "doc", "patient": psn_valid}) + "\n"
+                (out / "records.jsonl").write_text(rec_line, encoding="utf-8")
+                rep = {
+                    "schema": "raksha-report/1",
+                    "files": [{"input_sha256": sha_in, "output": "sanitized/note.txt", "status": "sanitized"}],
+                    "counts": {"files_total": 1, "files_sanitized": 1, "files_quarantined": 0, "records_processed": 1, "records_linked": 1},
+                }
+                (out / "report.json").write_text(json.dumps(rep), encoding="utf-8")
+
+            # Positive 1: Exact assigned PSN token -> 0 false PAN hits -> PASS
+            _write_release(f"Patient: {psn_valid}\nDiagnosis: Type 2 DM (E11.9)\nVitals: BP 120/80 mmHg\n")
+            res_ok = VP.audit(inp, out)
+            self.assertEqual(res_ok["privacy"]["residual_pattern_hits"], {})
+            self.assertEqual(res_ok["verdict"], "PASS")
+
+            # Negative 1: Genuine PAN adjacent to valid PSN -> PAN detected!
+            _write_release(f"Patient: {psn_valid} ABCDE1234F\nDiagnosis: Type 2 DM (E11.9)\nVitals: BP 120/80 mmHg\n")
+            res_adj = VP.audit(inp, out)
+            self.assertEqual(res_adj["privacy"]["residual_pattern_hits"].get("PAN"), 1)
+            self.assertEqual(res_adj["verdict"], "FAIL")
+
+            # Negative 2: Genuine PAN inside malformed / non-boundary PSN-like / unassigned strings -> PAN detected!
+            for bad_tok in (f"{psn_valid}-EXTRA", f"{psn_valid}_X", f"X_{psn_valid}", "PSN-ZXCVB9999Q"):
+                _write_release(f"Patient: {psn_valid}\nRef: {bad_tok}\nDiagnosis: Type 2 DM (E11.9)\nVitals: BP 120/80 mmHg\n")
+                res_bad = VP.audit(inp, out)
+                self.assertEqual(res_bad["privacy"]["residual_pattern_hits"].get("PAN"), 1, f"Failed to flag malformed {bad_tok}")
+                self.assertEqual(res_bad["verdict"], "FAIL")
+
+            # Equivalence check: _GramIndex matches exact brute-force substring scan including short/long items
+            samples = {"a1b2", "uh-100000", "ramesh kumar0 s12345", "9000012345"}
+            text_norm = "note with uh-100000 and a1b2 and row:12345 and 9000012345"
+            expected = sorted(s for s in samples if s in text_norm)
+            got = sorted(VP._GramIndex(samples).find_hits(text_norm))
+            self.assertEqual(got, expected)
+
+    def test_optional_analysis_cannot_overwrite_newer_job(self):
+        """Concurrent stale Job 1 optional audit must not clobber a newer active Job 2 release."""
+        import veil_passport as VP
+
+        with tempfile.TemporaryDirectory(prefix="veil_ui_iso_") as td:
+            srv, state = UI.create_server("127.0.0.1", 0, preload_demo=False, workdir=Path(td))
+            port = srv.server_address[1]
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            base = f"http://127.0.0.1:{port}"
+            try:
+                # Run Job 1
+                code1, s1 = _multipart_post(base + "/api/run", {"mode": "upload", "secret": "s1", "relpaths": json.dumps(["j1.csv"])}, [("j1.csv", _make_csv_bytes(10, prefix="J1"))])
+                self.assertEqual(code1, 202)
+                st1 = self._poll_until_done(base, s1["job_id"])
+                self.assertEqual(st1["status"], "ready")
+                j1_id = s1["job_id"]
+                with state.lock:
+                    j1_inp_mem = dict(state.active_upload_bytes or {})
+                    j1_out = state.active_out
+
+                # Start slow delayed Passport audit on Job 1 vs immediate Job 2 upload
+                real_audit = VP.audit
+                entered = threading.Event()
+                release = threading.Event()
+
+                def slow_audit(*a, **kw):
+                    entered.set()
+                    release.wait(timeout=5)
+                    return real_audit(*a, **kw)
+
+                t_stale = threading.Thread(
+                    target=lambda: UI._ensure_passport_audited(state, None, j1_inp_mem, j1_out, force=True, job_id=j1_id),
+                    daemon=True,
+                )
+                VP.audit = slow_audit
+                try:
+                    t_stale.start()
+                    self.assertTrue(entered.wait(timeout=3))
+                    # Upload and complete Job 2 while Job 1's optional audit is in-flight!
+                    code2, s2 = _multipart_post(base + "/api/run", {"mode": "upload", "secret": "s2", "label": "Job2Wins", "relpaths": json.dumps(["j2.csv"])}, [("j2.csv", _make_csv_bytes(20, prefix="J2"))])
+                    self.assertEqual(code2, 202)
+                    st2 = self._poll_until_done(base, s2["job_id"])
+                    self.assertEqual(st2["status"], "ready")
+                finally:
+                    release.set()
+                    t_stale.join(timeout=5)
+                    VP.audit = real_audit
+
+                with urllib.request.urlopen(base + "/api/state", timeout=5) as r:
+                    cur_state = json.loads(r.read().decode("utf-8"))
+                self.assertEqual(cur_state["dataset_label"], "Job2Wins")
+                self.assertEqual(cur_state["active_job_id"], s2["job_id"])
+                # Job 2 stays pending (was NOT overwritten by Job 1's stale 'verified' result!)
+                self.assertEqual(cur_state["passport_status"], "pending")
+                self.assertEqual(cur_state["report"]["counts"]["records_processed"], 20)
+            finally:
+                srv.shutdown()
+                srv.server_close()
 
 
 if __name__ == "__main__":

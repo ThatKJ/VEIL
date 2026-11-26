@@ -134,6 +134,7 @@ class ServerState:
         # Cache keyed by (input_digest, secret_hash, policy_mode) -> arena policy row dict
         self.arena_cache: dict[tuple[str, str, str], dict] = {}
         self.arena_cache_order: list[tuple[str, str, str]] = []
+        self.busy_run_dirs: Counter = Counter()
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -1319,6 +1320,9 @@ def _cleanup_old_workdirs(state: ServerState) -> None:
         for jid, jb in state.jobs.items():
             if jb.get("status") in ("uploading", "queued", "running", "validating"):
                 keep_dirs.add(f"job_{jid}")
+        for dname, cnt in state.busy_run_dirs.items():
+            if cnt > 0:
+                keep_dirs.add(dname)
     for p in state.workdir.glob("job_*"):
         if p.is_dir() and p.name not in keep_dirs:
             shutil.rmtree(p, ignore_errors=True)
@@ -1509,6 +1513,7 @@ def make_handler(state: ServerState):
                     inp = state.active_inp
                     upload_mem = state.active_upload_bytes
                     out = state.active_out
+                    ajid = state.active_job_id
                     if not active or not out:
                         self._send_json(404, {"error": "No active run"})
                         return
@@ -1516,7 +1521,7 @@ def make_handler(state: ServerState):
                     is_corrupt = urllib.parse.parse_qs(parsed.query).get("variant") == ["corrupt"] and bool(corrupted)
                     html_txt = corrupted["html"] if is_corrupt else active.get("passport_html")
                 if html_txt is None:
-                    R_ok, html_txt = _ensure_passport_audited(state, inp, upload_mem, out)
+                    R_ok, html_txt = _ensure_passport_audited(state, inp, upload_mem, out, job_id=ajid)
                 fname = "veil_privacy_passport_DEFECT.html" if urllib.parse.parse_qs(parsed.query).get("variant") == ["corrupt"] else "veil_privacy_passport.html"
                 self._send(
                     200,
@@ -1532,6 +1537,7 @@ def make_handler(state: ServerState):
                     inp = state.active_inp
                     upload_mem = state.active_upload_bytes
                     out = state.active_out
+                    ajid = state.active_job_id
                     if not active or not out:
                         self._send_json(404, {"error": "No active run"})
                         return
@@ -1539,7 +1545,7 @@ def make_handler(state: ServerState):
                     is_corrupt = urllib.parse.parse_qs(parsed.query).get("variant") == ["corrupt"] and bool(corrupted)
                     data = corrupted["audit"] if is_corrupt else (active["passport"] if active.get("passport_status") == "verified" else None)
                 if data is None:
-                    data, _ = _ensure_passport_audited(state, inp, upload_mem, out)
+                    data, _ = _ensure_passport_audited(state, inp, upload_mem, out, job_id=ajid)
                 self._send(
                     200,
                     json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"),
@@ -1958,35 +1964,42 @@ def make_handler(state: ServerState):
 
 
 def _ensure_passport_audited(state: ServerState, inp: Path | None, upload_mem: dict[str, bytes] | None, out: Path, force: bool = False, job_id: str | None = None) -> tuple[dict, str]:
-    if not force:
-        with state.lock:
-            if state.active and state.active.get("passport_status") == "verified" and state.active.get("passport_html"):
-                return state.active["passport"], state.active["passport_html"]
-    t0 = time.monotonic()
-    if inp is not None:
-        audit_res = VP.audit(inp, out)
-    else:
-        with tempfile.TemporaryDirectory(prefix="veil_ui_pp_") as td:
-            tp = Path(td)
-            _materialize_mem_files(upload_mem or {}, tp)
-            audit_res = VP.audit(tp, out)
-    html_res = VP.render_html(audit_res, None)
-    dt_s = round(time.monotonic() - t0, 3)
+    dname = out.parent.name
     with state.lock:
-        if state.active and (job_id is None or state.active_job_id == job_id):
-            state.active["passport"] = audit_res
-            state.active["passport_html"] = html_res
-            state.active["passport_status"] = "verified"
-            state.active.setdefault("timings", {})["passport_s"] = dt_s
-            state.active.setdefault("verification_history", []).insert(0, {
-                "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
-                "event": "On-Demand Assurance 3.0 Audit",
-                "status": "PASS" if not audit_res["residual_risks"] else "FAIL",
-                "summary": f"{audit_res['identity']['pseudonym_present_in_exact_record']} exact records · {audit_res['clinical']['occurrence_totals']} clinical · audited in {dt_s}s"
-                if not audit_res["residual_risks"]
-                else "; ".join(audit_res["residual_risks"]),
-            })
-    return audit_res, html_res
+        if not force and state.active and state.active.get("passport_status") == "verified" and state.active.get("passport_html"):
+            return state.active["passport"], state.active["passport_html"]
+        state.busy_run_dirs[dname] += 1
+    try:
+        t0 = time.monotonic()
+        if inp is not None:
+            audit_res = VP.audit(inp, out)
+        else:
+            with tempfile.TemporaryDirectory(prefix="veil_ui_pp_") as td:
+                tp = Path(td)
+                _materialize_mem_files(upload_mem or {}, tp)
+                audit_res = VP.audit(tp, out)
+        html_res = VP.render_html(audit_res, None)
+        dt_s = round(time.monotonic() - t0, 3)
+        with state.lock:
+            if state.active and (job_id is None or state.active_job_id == job_id):
+                state.active["passport"] = audit_res
+                state.active["passport_html"] = html_res
+                state.active["passport_status"] = "verified"
+                state.active.setdefault("timings", {})["passport_s"] = dt_s
+                state.active.setdefault("verification_history", []).insert(0, {
+                    "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                    "event": "On-Demand Assurance 3.0 Audit",
+                    "status": "PASS" if not audit_res["residual_risks"] else "FAIL",
+                    "summary": f"{audit_res['identity']['pseudonym_present_in_exact_record']} exact records · {audit_res['clinical']['occurrence_totals']} clinical · audited in {dt_s}s"
+                    if not audit_res["residual_risks"]
+                    else "; ".join(audit_res["residual_risks"]),
+                })
+        return audit_res, html_res
+    finally:
+        with state.lock:
+            state.busy_run_dirs[dname] -= 1
+            if state.busy_run_dirs[dname] <= 0:
+                state.busy_run_dirs.pop(dname, None)
 
 
 class ReusableThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):

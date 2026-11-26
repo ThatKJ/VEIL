@@ -76,6 +76,7 @@ _DOB_KEY = re.compile(r"(?i)^(?:birthDate|dob|date_of_birth|birthdate|janam|born
 _DOB_LINE = re.compile(r"(?im)^.*\b(?:dob|date\s+of\s+birth|birth\s*date|janam|जन्म\s*तिथि)\b.*$")
 ID_KEY = re.compile(r"(?i)(?:^|_|\b)(?:name|naam|patient|uhid|mrn|aadha?a?r|abha|mobile|phone|contact|email)(?:$|_|\b)")
 PSN = re.compile(r"PSN-[0-9A-Z]{6,16}")
+_PSN_EXACT_TOKEN = re.compile(r"(?<![A-Za-z0-9_\-])PSN-[0-9A-Z]{6,16}(?![A-Za-z0-9_\-])")
 
 
 def norm(s: str) -> str:
@@ -260,6 +261,44 @@ def _flat_json(obj, skip_dob: bool = False) -> str:
     return "\n".join(parts)
 
 
+class _GramIndex:
+    """Exact O(N + L) multi-pattern substring matcher via rarest 5-gram + multi-gram O(1) gating.
+
+    Mathematically equivalent to `[s for s in strings if s in text]` with zero missed matches.
+    """
+
+    def __init__(self, strings: set[str] | list[str]):
+        items = sorted({s for s in strings if s})
+        self.short: tuple[str, ...] = tuple(s for s in items if len(s) < 5)
+        long_items = [s for s in items if len(s) >= 5]
+        # Value per bucket is (s, g_head, g_mid, g_tail) so false anchor hits fail in O(1) without scanning `text`.
+        self.by_gram: dict[str, list[tuple[str, str, str, str]]] = {}
+        if long_items:
+            gram_df: Counter = Counter()
+            for s in long_items:
+                for g in {s[j : j + 5] for j in range(len(s) - 4)}:
+                    gram_df[g] += 1
+            for s in long_items:
+                best = min((s[j : j + 5] for j in range(len(s) - 4)), key=gram_df.__getitem__)
+                mid = (len(s) - 5) // 2
+                entry = (s, s[:5], s[mid : mid + 5], s[-5:])
+                self.by_gram.setdefault(best, []).append(entry)
+        self.grams: frozenset[str] = frozenset(self.by_gram)
+
+    def find_hits(self, text: str) -> list[str]:
+        if not text or (not self.short and not self.grams):
+            return []
+        matched = [s for s in self.short if s in text]
+        if self.grams and len(text) >= 5:
+            tgrams = {text[j : j + 5] for j in range(len(text) - 4)}
+            hits = tgrams & self.grams
+            for g in hits:
+                for s, gh, gm, gt in self.by_gram[g]:
+                    if gh in tgrams and gm in tgrams and gt in tgrams and s in text:
+                        matched.append(s)
+        return matched
+
+
 class _ParsedOutputFile:
     """Lazy parser for resolving exact exported/input records (CSV/TSV row, JSON pointer, JSONL line, text)."""
 
@@ -364,8 +403,11 @@ def _make_check(status: str, passed: int, total: int, detail: str = "") -> dict:
 
 def audit(inp: Path, out: Path) -> dict:
     t0 = time.monotonic()
-    rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rep_text = (out / "report.json").read_text(encoding="utf-8")
+    rep = json.loads(rep_text)
+    rj_text = (out / "records.jsonl").read_text(encoding="utf-8")
+    recs = [json.loads(l) for l in rj_text.splitlines() if l.strip()]
+    assigned_psns = {str(r["patient"]) for r in recs if r.get("patient") and PSN.fullmatch(str(r["patient"]))}
     files_rep = rep.get("files", [])
     by_sha_q: dict[str, list[dict]] = {}
     for e in files_rep:
@@ -411,6 +453,7 @@ def audit(inp: Path, out: Path) -> dict:
     row_match = row_total = 0
     fhir_refs_ok = fhir_refs_tot = fhir_dates_ok = fhir_dates_tot = 0
     parsed_cache: dict[str, _ParsedOutputFile] = {}
+    in_parsed_cache: dict[Path, _ParsedOutputFile] = {}
 
     for p, e in used_entries:
         if not e or e.get("status") != "sanitized":
@@ -423,10 +466,14 @@ def audit(inp: Path, out: Path) -> dict:
         if pf is None:
             pf = _ParsedOutputFile(o)
             parsed_cache[out_rel] = pf
+        ipf = in_parsed_cache.get(p)
+        if ipf is None:
+            ipf = _ParsedOutputFile(p, raw_decode=True)
+            in_parsed_cache[p] = ipf
         suf = o.suffix.lower()
         try:
             if suf == ".json":
-                obj = json.loads(pf.text)
+                obj = pf.obj if pf.obj is not None else json.loads(pf.text)
                 rok, rtot, dok, dtot = _audit_fhir_bundle(obj)
                 fhir_refs_ok += rok
                 fhir_refs_tot += rtot
@@ -434,7 +481,7 @@ def audit(inp: Path, out: Path) -> dict:
                 fhir_dates_tot += dtot
             elif suf in (".csv", ".tsv"):
                 orows = pf.rows if pf.rows is not None else []
-                irows = list(csv.reader(io.StringIO(decode(p.read_bytes())), delimiter=_tabular_delim(p.suffix.lower(), decode(p.read_bytes()))))
+                irows = ipf.rows if ipf.rows is not None else []
                 row_total += 1
                 row_match += len(orows) == len(irows)
             parse_ok += 1
@@ -478,24 +525,36 @@ def audit(inp: Path, out: Path) -> dict:
         "1:1 SHA-256 accounting, valid parses, zero unexpected exports or unsafe paths",
     )
 
-    # ---------------- A. Privacy residue (independent detectors across decoded channels)
+    # ---------------- A. Privacy residue (independent detectors + O(N + L) indexed lookup + exact assigned-PSN PAN context)
     ident, inst_vals = _harvest_independent_identifiers(inp)
+    ident_idx = _GramIndex(ident)
+    inst_idx = _GramIndex(inst_vals)
     pat = Counter()
     resid_files = Counter()
     inst_preserved = 0
     channels = {
-        "report.json": SHA_HEX.sub("", (out / "report.json").read_text(encoding="utf-8")),
-        "records.jsonl": (out / "records.jsonl").read_text(encoding="utf-8"),
+        "report.json": SHA_HEX.sub("", rep_text),
+        "records.jsonl": rj_text,
         "file names": "\n".join(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()),
     }
-    for p in sorted((out / "sanitized").rglob("*")):
+    for rel_out, pf in sorted(parsed_cache.items()):
+        channels[rel_out] = pf.text
+    for p in sorted(san_root.rglob("*")) if san_root.is_dir() else ():
         if p.is_file():
-            channels[p.relative_to(out).as_posix()] = p.read_text(encoding="utf-8", errors="replace")
+            rel_key = "sanitized/" + p.relative_to(san_root).as_posix()
+            if rel_key not in channels:
+                channels[rel_key] = p.read_text(encoding="utf-8", errors="replace")
+
+    def _mask_assigned_psn(m: re.Match) -> str:
+        tok = m.group(0)
+        return " " if tok in assigned_psns else tok
+
     _CONTAM_LINE = re.compile(r"(?i)(?:\bpatient\s*[:\-]\s*(?!PSN-)[A-Z][a-z]+)")
     for name, text in channels.items():
         tx = UUID.sub(" ", with_decoded_extras(text))
-        for label, rx in (("phone", PHONE), ("aadhaar", AADHAAR), ("ABHA", ABHA), ("email", EMAIL), ("PAN", PAN)):
-            hits_rx = rx.findall(tx)
+        tx_pan = _PSN_EXACT_TOKEN.sub(_mask_assigned_psn, tx) if (assigned_psns and "PSN-" in tx) else tx
+        for label, rx, src_t in (("phone", PHONE, tx), ("aadhaar", AADHAAR, tx), ("ABHA", ABHA, tx), ("email", EMAIL, tx), ("PAN", PAN, tx_pan)):
+            hits_rx = rx.findall(src_t)
             if label in ("aadhaar", "ABHA"):
                 hits_rx = [h for h in hits_rx if not _COMPACT_TS.fullmatch(re.sub(r"\D", "", h))]
             n = len(hits_rx)
@@ -503,20 +562,21 @@ def audit(inp: Path, out: Path) -> dict:
                 pat[label] += n
                 resid_files[name] += n
         low = norm(tx)
-        hits = sum(1 for v in ident if v in low)
+        hits = len(ident_idx.find_hits(low))
         if hits:
             pat["input identity value"] += hits
             resid_files[name] += hits
         if inst_vals:
-            matched_inst = [v for v in inst_vals if v in low]
+            matched_inst = inst_idx.find_hits(low)
             if matched_inst:
                 # Never whitelist institutional text if direct PII/patient identity co-occurs on the same line
                 contam = 0
                 for line in tx.splitlines():
                     ln = norm(line)
+                    line_pan = _PSN_EXACT_TOKEN.sub(_mask_assigned_psn, line) if (assigned_psns and "PSN-" in line) else line
                     if any(v in ln for v in matched_inst) and (
                         PHONE.search(line) or AADHAAR.search(line) or ABHA.search(line)
-                        or PAN.search(line) or _CONTAM_LINE.search(line)
+                        or PAN.search(line_pan) or _CONTAM_LINE.search(line)
                     ):
                         contam += 1
                 if contam:
@@ -551,7 +611,6 @@ def audit(inp: Path, out: Path) -> dict:
     recs_by_file: dict[str, list[dict]] = {}
     for r in recs:
         recs_by_file.setdefault(r["file"], []).append(r)
-    in_parsed_cache: dict[str, _ParsedOutputFile] = {}
     patient_deltas: dict[str, set[int]] = {}
     for p, e in used_entries:
         if not e or e.get("status") != "sanitized":
@@ -560,7 +619,11 @@ def audit(inp: Path, out: Path) -> dict:
         if not (out / out_rel).is_file():
             continue
         pf = parsed_cache.get(out_rel) or _ParsedOutputFile(out / out_rel)
-        it = decode(p.read_bytes())
+        ipf = in_parsed_cache.get(p)
+        if ipf is None:
+            ipf = _ParsedOutputFile(p, raw_decode=True)
+            in_parsed_cache[p] = ipf
+        it = ipf.text
         in_counts = _extract_clinical_counts(it)
         out_counts = _extract_clinical_counts(pf.text)
         for (label, expr), icnt in in_counts.items():
@@ -573,10 +636,6 @@ def audit(inp: Path, out: Path) -> dict:
         if suf in (".json", ".csv", ".tsv", ".jsonl", ".ndjson"):
             file_recs = recs_by_file.get(out_rel, [])
             if file_recs:
-                ipf = in_parsed_cache.get(out_rel)
-                if ipf is None:
-                    ipf = _ParsedOutputFile(p, raw_decode=True)
-                    in_parsed_cache[out_rel] = ipf
                 for rec in file_recs:
                     in_txt, ok_in = ipf.resolve_record(str(rec.get("loc", "")), skip_dob=True)
                     out_txt, ok_out = pf.resolve_record(str(rec.get("out") or rec.get("loc") or ""), skip_dob=True)
