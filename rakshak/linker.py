@@ -189,32 +189,68 @@ class Linker:
             roots = sorted({self.find(i) for i in range(n)})
             n_roots = max(2, len(roots))
             tok_df = Counter()
-            index = defaultdict(list)
+            index = defaultdict(set)
+            sec_idx = defaultdict(set)
+            root_toks: dict[int, set[str]] = {}
             for r in roots:
+                c = self.cl[r]
                 seen_r = set()
-                for nk in self.cl[r].names:
+                for nk in c.names:
                     for t in set(nk):
                         if len(t) >= 2:
-                            index[t].append(r)
+                            index[t].add(r)
                             seen_r.add(t)
+                root_toks[r] = seen_r
                 for t in seen_r:
                     tok_df[t] += 1
+                for dob in c.dobs:
+                    sec_idx[("D", dob)].add(r)
+                for v in c.villages:
+                    sec_idx[("V", v)].add(r)
+                for rt in c.rels:
+                    if rt:
+                        sec_idx[("R", rt[0])].add(r)
             for r in roots:
                 if self.find(r) != r:
                     continue
                 c = self.cl[r]
-                cands = set()
-                for nk in c.names:
-                    for t in set(nk):
-                        if len(t) >= 2:
-                            cands.update(index.get(t, []))
+                c_toks = root_toks.get(r)
+                if not c_toks or not (c.dobs or c.villages or c.rels):
+                    continue
+                sec_cands = set()
+                for dob in c.dobs:
+                    sec_cands |= sec_idx[("D", dob)]
+                for v in c.villages:
+                    vb = sec_idx[("V", v)]
+                    if len(vb) <= 500 or c.dobs or c.rels:
+                        sec_cands |= vb
+                for rt in c.rels:
+                    if rt:
+                        sec_cands |= sec_idx[("R", rt[0])]
+                if len(sec_cands) <= 1 and (not sec_cands or r in sec_cands):
+                    continue
+                if len(sec_cands) > 64:
+                    name_cands = set()
+                    for t in c_toks:
+                        name_cands |= index.get(t, ())
+                    cand_roots = sec_cands & name_cands
+                else:
+                    cand_roots = sec_cands
+                if len(cand_roots) > 256 and not (c.dobs or c.rels):
+                    continue
                 scored = []
-                for o in sorted(cands):
+                seen_o = {r}
+                for o in sorted(cand_roots):
                     o = self.find(o)
-                    if o == r or any(x[1] == o for x in scored):
+                    if o in seen_o:
                         continue
+                    seen_o.add(o)
                     d = self.cl[o]
-                    if not (c.names and d.names) or not compatible(c, d):
+                    if not d.names:
+                        continue
+                    d_toks = root_toks.get(o) or {t for nk in d.names for t in nk if len(t) >= 2}
+                    shared = c_toks & d_toks
+                    if not shared:
                         continue
                     rel_m = _rel_match(c.rels, d.rels)
                     dob_m = bool(c.dobs & d.dobs)
@@ -222,9 +258,8 @@ class Linker:
                               and min(abs(x - y) for x in c.ages for y in d.ages) <= 2)
                     if not (dob_m or rel_m or vill_m):
                         continue
-                    shared = {t for nk in c.names for t in nk if len(t) >= 2} & {
-                        t for nk in d.names for t in nk if len(t) >= 2
-                    }
+                    if not compatible(c, d):
+                        continue
                     idf = sum(min(3.5, math.log2(n_roots / max(1, tok_df[t]))) for t in shared)
                     fs = idf
                     if dob_m:

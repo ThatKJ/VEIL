@@ -1090,6 +1090,10 @@ from contextlib import contextmanager
 FILE_BUDGET_S = 45
 
 
+def _file_budget(raw_len: int) -> int:
+    return max(FILE_BUDGET_S, min(240, FILE_BUDGET_S + raw_len // 250_000))
+
+
 class BudgetExceeded(Exception):
     pass
 
@@ -1153,7 +1157,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if unreadable:
             job.status, job.reason = "quarantined", "unreadable"
         else:
-              with time_budget(FILE_BUDGET_S):
+              with time_budget(_file_budget(len(job.raw))):
                 try:
                     pass1(job, H)
                 except BudgetExceeded:
@@ -1257,7 +1261,7 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if j.status != "sanitized":
             continue
         try:
-          with time_budget(FILE_BUDGET_S):
+          with time_budget(_file_budget(len(j.raw))):
               if j.kind == "jsonl":
                   lines = []
                   for r, obj in zip(j.recs, j.data):

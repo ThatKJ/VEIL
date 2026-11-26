@@ -47,10 +47,166 @@ class Ctx:
         return self.psn or "[PATIENT]"
 
 
+from collections import Counter, defaultdict
+from functools import lru_cache
+
+
+_RX_ASCII_WORD = re.compile(r"[A-Za-z]+")
+_RX_DEVA_WORD = re.compile(rf"[{DEVA}]+")
+_RX_DIG_RUN = re.compile(r"\d+")
+_RX_ID_SEP = re.compile(r"[\s/\-_.]+")
+_RX_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+class _TokenSetSub:
+    """O(L) drop-in replacement for large single-token regex alternations."""
+
+    def __init__(self, tok_rx: re.Pattern, pure: frozenset[str], casefold: bool, fallback_rx: re.Pattern | None = None):
+        self.tok_rx = tok_rx
+        self.pure = pure
+        self.casefold = casefold
+        self.fallback_rx = fallback_rx
+
+    def sub(self, repl, text: str) -> str:
+        cf, p = self.casefold, self.pure
+        def _fn(m):
+            k = m.group(0).casefold() if cf else m.group(0)
+            return repl(m) if k in p else m.group(0)
+        out = self.tok_rx.sub(_fn, text)
+        return self.fallback_rx.sub(repl, out) if self.fallback_rx is not None else out
+
+    def search(self, text: str):
+        cf, p = self.casefold, self.pure
+        for m in self.tok_rx.finditer(text):
+            if (m.group(0).casefold() if cf else m.group(0)) in p:
+                return m
+        return self.fallback_rx.search(text) if self.fallback_rx is not None else None
+
+
+class _PhraseIndexSub:
+    """O(L) prefix-token indexed matcher for large multi-word name/place alternations."""
+
+    def __init__(self, items: list[str], tok_rx: re.Pattern, pat_builder, casefold: bool):
+        self.tok_rx = tok_rx
+        self.casefold = casefold
+        self.pat_builder = pat_builder
+        self.by_first: dict[str, list[str]] = defaultdict(list)
+        self.always: list[str] = []
+        for it in items:
+            m = tok_rx.search(it)
+            if m:
+                k = m.group(0).casefold() if casefold else m.group(0)
+                self.by_first[k].append(it)
+            else:
+                self.always.append(it)
+        self.firsts = frozenset(self.by_first)
+        self.always_rx = pat_builder(self.always) if self.always else None
+        self._cache: dict[tuple[str, ...], re.Pattern] = {}
+
+    def _compile(self, cands: list[str]) -> re.Pattern:
+        key = tuple(cands)
+        rx = self._cache.get(key)
+        if rx is None:
+            if len(self._cache) > 4096:
+                self._cache.clear()
+            cands_sorted = sorted(dict.fromkeys(cands), key=len, reverse=True)
+            rx = self.pat_builder(cands_sorted)
+            self._cache[key] = rx
+        return rx
+
+    def _cands(self, text: str) -> list[str]:
+        hits = {(m.group(0).casefold() if self.casefold else m.group(0)) for m in self.tok_rx.finditer(text)} & self.firsts
+        if not hits:
+            return []
+        cands: list[str] = []
+        for h in sorted(hits):
+            cands.extend(self.by_first[h])
+        return cands
+
+    def sub(self, repl, text: str) -> str:
+        out = self.always_rx.sub(repl, text) if self.always_rx is not None else text
+        cands = self._cands(out)
+        return self._compile(cands).sub(repl, out) if cands else out
+
+    def search(self, text: str):
+        if self.always_rx is not None:
+            m = self.always_rx.search(text)
+            if m:
+                return m
+        cands = self._cands(text)
+        return self._compile(cands).search(text) if cands else None
+
+
+class _IdIndexSub:
+    """O(L) 4-gram-indexed matcher for large H.ids collections (invariant under separators)."""
+
+    def __init__(self, ids: list[str]):
+        self.always: list[str] = []
+        canon_pairs: list[tuple[str, str]] = []
+        gram_df: Counter = Counter()
+        for it in ids:
+            c = _RX_NON_ALNUM.sub("", it.lower())
+            if len(c) < 4:
+                self.always.append(it)
+            else:
+                canon_pairs.append((it, c))
+                for k in {c[j:j + 4] for j in range(len(c) - 3)}:
+                    gram_df[k] += 1
+        self.by_gram: dict[str, list[str]] = defaultdict(list)
+        for it, c in canon_pairs:
+            best = min((c[j:j + 4] for j in range(len(c) - 3)), key=lambda g: gram_df[g])
+            self.by_gram[best].append(it)
+        self.grams = frozenset(self.by_gram)
+        self.always_rx = self._build_sorted(self.always) if self.always else None
+        self._cache: dict[tuple[str, ...], re.Pattern] = {}
+
+    @staticmethod
+    def _build_sorted(items: list[str]) -> re.Pattern:
+        s = sorted(dict.fromkeys(items), key=len, reverse=True)
+        alt = "|".join(r"[\s/\-_.]*".join(re.escape(c) for c in i) for i in s)
+        return re.compile(rf"(?i)(?<![A-Za-z0-9])(?:{alt})(?![A-Za-z0-9])")
+
+    def _cands(self, text: str) -> list[str]:
+        compact = _RX_NON_ALNUM.sub("", _RX_ID_SEP.sub("", text).lower())
+        if len(compact) < 4:
+            return []
+        hits = {compact[j:j + 4] for j in range(len(compact) - 3)} & self.grams
+        if not hits:
+            return []
+        cands: list[str] = []
+        for h in sorted(hits):
+            cands.extend(self.by_gram[h])
+        return cands
+
+    def _compile(self, cands: list[str]) -> re.Pattern:
+        key = tuple(cands)
+        rx = self._cache.get(key)
+        if rx is None:
+            if len(self._cache) > 4096:
+                self._cache.clear()
+            rx = self._build_sorted(cands)
+            self._cache[key] = rx
+        return rx
+
+    def sub(self, repl, text: str) -> str:
+        out = self.always_rx.sub(repl, text) if self.always_rx is not None else text
+        cands = self._cands(out)
+        return self._compile(cands).sub(repl, out) if cands else out
+
+    def search(self, text: str):
+        if self.always_rx is not None:
+            m = self.always_rx.search(text)
+            if m:
+                return m
+        cands = self._cands(text)
+        return self._compile(cands).search(text) if cands else None
+
+
 # ---------------------------------------------------------------- compiled sweeps (built once per run)
 class Sweeper:
     def __init__(self, H):
         self.H = H
+        self._clean_cache: dict[tuple, str] = {}
         lat_full = sorted({n for n in H.full_names if not re.search(rf"[{DEVA}]", n)}, key=len, reverse=True)
         dev_full = sorted({n for n in H.full_names if re.search(rf"[{DEVA}]", n)}, key=len, reverse=True)
         lat_tok = sorted({t for t in H.name_tokens if not re.search(rf"[{DEVA}]", t)}, key=len, reverse=True)
@@ -60,20 +216,52 @@ class Sweeper:
         def alt(items, f=lambda x: x):
             return "|".join(f(i) for i in items) or r"(?!x)x"
 
-        latf = alt(lat_full, lambda n: sep.join(re.escape(p) for p in n.split()))
-        self.rx_lat_full = re.compile(rf"(?i)(?<![A-Za-z])(?:{latf})(?![A-Za-z])")
-        devf = alt(dev_full, lambda n: r"\s+".join(re.escape(p) for p in n.split()))
-        self.rx_dev_full = re.compile(rf"(?<![{DEVA}])(?:{devf})(?![{DEVA}])")
-        self.rx_lat_tok = re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(lat_tok, re.escape)})(?![A-Za-z])")
-        self.rx_dev_tok = re.compile(rf"(?<![{DEVA}])(?:{alt(dev_tok, re.escape)})(?![{DEVA}])")
+        def _compile_lat_full(items):
+            return re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(items, lambda n: sep.join(re.escape(p) for p in n.split()))})(?![A-Za-z])")
+
+        def _compile_dev_full(items):
+            return re.compile(rf"(?<![{DEVA}])(?:{alt(items, lambda n: r'\s+'.join(re.escape(p) for p in n.split()))})(?![{DEVA}])")
+
+        def _compile_place(items):
+            return re.compile(rf"(?i)(?<![A-Za-z{DEVA}])(?:{alt(items, lambda n: sep.join(re.escape(x) for x in n.split()))})(?![A-Za-z{DEVA}])")
+
+        self.rx_lat_full = _compile_lat_full(lat_full) if len(lat_full) <= 64 else _PhraseIndexSub(lat_full, _RX_ASCII_WORD, _compile_lat_full, True)
+        self.rx_dev_full = _compile_dev_full(dev_full) if len(dev_full) <= 64 else _PhraseIndexSub(dev_full, _RX_DEVA_WORD, _compile_dev_full, False)
+
+        if len(lat_tok) <= 64:
+            self.rx_lat_tok = re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(lat_tok, re.escape)})(?![A-Za-z])")
+        else:
+            pure = frozenset(t.casefold() for t in lat_tok if t.isascii() and t.isalpha())
+            other = [t for t in lat_tok if not (t.isascii() and t.isalpha())]
+            fb = re.compile(rf"(?i)(?<![A-Za-z])(?:{alt(other, re.escape)})(?![A-Za-z])") if other else None
+            self.rx_lat_tok = _TokenSetSub(_RX_ASCII_WORD, pure, True, fb)
+
+        if len(dev_tok) <= 64:
+            self.rx_dev_tok = re.compile(rf"(?<![{DEVA}])(?:{alt(dev_tok, re.escape)})(?![{DEVA}])")
+        else:
+            pure = frozenset(t for t in dev_tok if all("\u0900" <= c <= "\u097f" for c in t))
+            other = [t for t in dev_tok if not all("\u0900" <= c <= "\u097f" for c in t)]
+            fb = re.compile(rf"(?<![{DEVA}])(?:{alt(other, re.escape)})(?![{DEVA}])") if other else None
+            self.rx_dev_tok = _TokenSetSub(_RX_DEVA_WORD, pure, False, fb)
+
         places = sorted((p for p in H.places if p not in H.safe_places), key=len, reverse=True)
-        self.rx_place = re.compile(
-            rf"(?i)(?<![A-Za-z{DEVA}])(?:{alt(places, lambda n: sep.join(re.escape(x) for x in n.split()))})(?![A-Za-z{DEVA}])")
+        self.rx_place = _compile_place(places) if len(places) <= 64 else _PhraseIndexSub(places, _RX_ASCII_WORD, _compile_place, True)
+
         ids = sorted(H.ids, key=len, reverse=True)
-        self.rx_ids = re.compile(
-            rf"(?i)(?<![A-Za-z0-9])(?:{alt(ids, lambda i: r'[\s/\-_.]*'.join(re.escape(c) for c in i))})(?![A-Za-z0-9])")
+        if len(ids) <= 64:
+            self.rx_ids = re.compile(
+                rf"(?i)(?<![A-Za-z0-9])(?:{alt(ids, lambda i: r'[\s/\-_.]*'.join(re.escape(c) for c in i))})(?![A-Za-z0-9])")
+        else:
+            self.rx_ids = _IdIndexSub(ids)
+
         digs = sorted(H.id_digits | H.phones, key=len, reverse=True)
-        self.rx_digits = re.compile(rf"(?<!\d)(?:{alt(digs, re.escape)})(?!\d)")
+        if len(digs) <= 64:
+            self.rx_digits = re.compile(rf"(?<!\d)(?:{alt(digs, re.escape)})(?!\d)")
+        else:
+            pure = frozenset(d for d in digs if d.isascii() and d.isdigit())
+            other = [d for d in digs if not (d.isascii() and d.isdigit())]
+            fb = re.compile(rf"(?<!\d)(?:{alt(other, re.escape)})(?!\d)") if other else None
+            self.rx_digits = _TokenSetSub(_RX_DIG_RUN, pure, False, fb)
 
 
 # ---------------------------------------------------------------- pieces
@@ -307,7 +495,16 @@ def _scrub_attach(m, ctx: Ctx, sw: Sweeper, put) -> str:
 def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     if not text or not text.strip():
         return text
+    cache_key = None
+    if allow_b64 and len(text) <= 120 and "\n" not in text:
+        r = ctx.rule
+        rsig = (r.band, r.dist, r.pin, r.dob) if r is not None else None
+        cache_key = (text, ctx.order, rsig)
+        cached = sw._clean_cache.get(cache_key)
+        if cached is not None:
+            return cached
     st = ctx.stats
+    id0, gen0 = st["identifiers"], st["generalized"]
     M = Masker()
     t = _decode_hidden(text)
 
@@ -554,7 +751,11 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     t_view = t
     t = RX_AGE_FREE.sub(age_free, t)
 
-    return M.restore(t)
+    out = M.restore(t)
+    if (cache_key is not None and ctx.days != 0 and out == text
+            and st["identifiers"] == id0 and st["generalized"] == gen0 and len(sw._clean_cache) < 20000):
+        sw._clean_cache[cache_key] = out
+    return out
 
 
 L_CLIN = CLIN_PROTECT
