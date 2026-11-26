@@ -45,27 +45,27 @@ A patient who is anonymous in one record is often identifiable once all of their
 pooled, and pooling is exactly what the attacker does. Rakshak resolves each patient's records first, then
 evaluates the **pooled** quasi-identifiers (district, gender, age, birth year, conditions) of that patient
 across every file, script and hospital. Generalisation is escalated **only for patients whose pooled profile is rare**:
-a small equivalence class in the release, a rare condition (shared by at most 3 patients), or age 80 and over. For those
-patients the DOB is removed, a wider truthful band is used, and PIN/tehsil are dropped. Bands are **consistent per patient**,
-so intersecting records cannot recover an exact age. Dates move by a secret per-patient shift, so stays and intervals stay exact.
+a small equivalence class (`k10 < 2` or `k5 < 5`), a rare condition (shared by at most 3 patients), or age 80 and over. For those
+patients a wider truthful age band (`10`-year) is used, and village/district/PIN fine geography are suppressed. Bands are **consistent per patient**,
+so intersecting records cannot recover an exact age. Dates (encounters, FHIR `lastUpdated`, and escalated DOBs) move by a secret per-patient HMAC shift, so stays, clinical intervals, and temporal ordering stay exact.
 
 Prior art: risk-driven anonymisation with attacker models exists for structured tables (ARX). Our contribution is applying
 it to pooled multilingual free text plus structured records in one offline pipeline. This is a combination, not a "first".
 
-## Measured results (local harness, NOT the official evaluator)
+## Measured results (local harness, commit `c7300d4`, NOT the official evaluator)
 
 Local re-implementation of the published scorer and attacker (`docs/SCORING.md`, `docs/ATTACKS.md`). The official
 evaluator is sealed, so totals below are **estimates**. Dev = organizer practice data. Chaos sets are independently
-generated synthetic data with unseen formats.
+generated synthetic data with unseen regional formats, scripts, and traps.
 
-| Dataset | Personal data leaked (check_dev) | Canaries | Medical values kept | Link F0.5 / false merges | Est. total |
-|---|---|---|---|---|---|
-| official dev | 0.0% | 0/4 | 100.0% | 0.99 / 0 | 88.2 |
-| chaos_dev | 0.0% | 0/3 | n/a | 0.91 / 0 | 86.8 |
+| Dataset | Personal data leaked (`check_dev`) | Canaries | Medical kept | Link F0.5 / false merges | Utility / Privacy | Est. total |
+|---|---:|---:|---:|---:|---:|---:|
+| official `dev` | 0.0% | 0 / 4 | 99.3% (probes) | 0.989 / **0** | 0.941 / 0.870 | **91.95** |
+| `chaos_dev` | 0.0% | 0 / 3 | 99.4% (probes) | 0.978 / **0** | 0.928 / 0.902 | **92.51** |
+| 5 validation holdouts (`H1..H5`) | 0.1–0.7% | **0 / 20** | 99.7–100% | 0.971–0.991 / **0** | 0.895–0.913 / 0.834–0.979 | **89.47–94.79** |
+| 3 unseen blind regional sets (`H9..H11`) | 0.8–1.8% | **0 / 12** | 100.0% | 0.978–0.994 / **0** | 0.904–0.918 / 0.880–0.921 | **87.09–91.95** (mean **89.94**) |
 
-Privacy approaches on identical inputs (dev, local attacker): masking only, privacy 0.55; fixed transforms, 0.65;
-**adaptive patient-level, 0.80** (profile re-identification 0.90 → 0.40 of raw).
-Full logs: see the project brief and the experiment leaderboard.
+High-cardinality stress (`scale_cardinality.py`, 2 CPUs): 100,000 rows x 100,000 unique patients completes in **10.87s** (`659.2 MB` peak RSS, `0` quarantined); 2,000 small files in **1.15s**. Full logs: see `docs/brief.pdf` and `research/`.
 
 ## Models
 
@@ -76,6 +76,6 @@ tables, and probabilistic-style record linkage.
 
 * The attacker model is the published one, so resistance to *other* attackers is not guaranteed. No finite test proves anonymity.
 * Unseen layouts are handled generically (value shape, nested-record discovery), but entirely novel formats may still leak.
-  Files we cannot parse safely are quarantined, which costs record retention but never leaks.
-* Escalated (high-risk) patients lose their DOB (age band kept), a deliberate privacy-over-utility choice.
-* Names with no structural or contextual cue at all can survive. A final verification pass catches harvested values only.
+  Files we cannot parse safely (or symlinks outside `--input`) are quarantined cleanly, never exported raw.
+* Rare-condition + exact stay length (LOS) remains partially matchable under targeted A5 (`0.20–0.64` rel. to raw) unless clinical diagnoses or stay lengths were degraded; clinical truth is preserved by design.
+* Names with no structural or contextual cue at all can survive. An independent `O(N)` verification pass sweeps harvested critical tokens while guarding `Dr.` spans.
