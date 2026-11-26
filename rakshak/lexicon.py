@@ -133,33 +133,34 @@ FIELD_RULES = [
     ("ABHA", r"abha\w*|आभा|healthid"),
     ("PAN", r"pan|panno|pannumber"),
     ("EMAIL", r"e?mail|email\w*|ईमेल"),
-    ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|telecom|भ्रमणध्वनी"),
+    ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|phon|telecom|भ्रमणध्वनी"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
     ("MRN", r"uhid|mrn|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|adm\w*no|admission|crn|crno|"
             r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
-    ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|जन्म|dateofbirth|dtb"),
+    ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|janana|jananam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
-    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|tande|ganda|tandegand|deuta|swami|pitri|"
+    ("REL_NAME", r"relative\w*|guardian\w*|father\w*|husband\w*|mother\w*|wife|spouse|attendant\w*|kin|vali|tande|ganda|tandegand|deuta|swami|pitri|bandhu|bandhuperu|rakshithav|"
                  r"pita|pati|पिता|पति|संबंधी|अभिभावक|nok|parent\w*|caller|callername|visitor\w*|witness\w*|"
                  r"informant|escort|contactperson|requester|applicant|claimant|nominee|sender|forwardedby|"
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
-    ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|relation_type"),
-    ("DOCTOR", r"doctor\w*|dr|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
+    ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|bandham|relation_type"),
+    ("DOCTOR", r"doctor\w*|dr|vaidyan|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
                r"careteam|team|teams|nurses?|nursing_staff|roster|dutyroster|rota|anaesthetist\w*|intern\w*|resident_doctor|"
+               r"seenby|assistedby|careprovider\w*|attendingstaff|"
                r"nurse|staff|clerk|exportedby|practitioner|performer|author|signedby|verifiedby"),
-    ("SAFE", r"aushadhi|aushadh|dawa|dawai|oushadha|vaidyakiya|roganirnaya|pariksha|dooru|hospital|facility|lab|department|dept|specialty|speciality|ward|bed|"
+    ("SAFE", r"aushadhi|aushadh|lakshanam|pani|chuma|rogam|marunnu|parathi|veekkam|dawa|dawai|oushadha|vaidyakiya|roganirnaya|pariksha|dooru|hospital|facility|lab|department|dept|specialty|speciality|ward|bed|"
              r"diagnos\w*|icd\w*|condition|complaint\w*|history|procedure\w*|package\w*|drug\w*|medicin\w*|"
              r"medication\w*|dose|dosage|test\w*|loinc|result\w*|value|unit\w*|range|amount\w*|status|vital\w*|"
              r"bp|pulse|temp\w*|spo2|weight\w*|height\w*|bmi|rbs|gender|sex|ling|लिंग|tehsil|तहसील|district|"
              r"distt|jila|jillo|जिला|ज़िला|zila|state|visitid|bill\w*|panel\w*|schema|system|type|code|display|frequency|"
              r"route|duration|advice|notes?|remarks?|comment\w*|summary|course|investigation\w*|finding\w*"),
-    ("NAME", r"name|naam|hesaru|rugir|rugi|rogir|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
+    ("NAME", r"name|naam|hesaru|peru|rugir|rugi|rogir|नाम|नाँव|nm|naav|nav|नाव|रुग्ण|रुग्णाचे|रुग्णनाव|patient|pt|beneficiary|labharthi|लाभार्थी|insured|rogi|dardi|daradi|client|"
              r"मरीज|मरीज़|रोगी|નામ|દર્દી|ਨਾਮ|রোগী|first|last|given|family|"
              r"surname|fullname|firstname|lastname|middle|local|alias"),
-    ("AGE", r"age|umar|umr|umra|umir|vayassu|vayasu|boyos|boyosh|bayas|bayos|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
-    ("VILLAGE", r"village|gaon|gaanv|gam|gram|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
+    ("AGE", r"age|umar|umr|umra|umir|vayassu|vayasu|prayam|boyos|boyosh|bayas|bayos|आयु|उम्र|उमर|उमिर|ageyears|yrs|yr|vaya|वय"),
+    ("VILLAGE", r"village|gaon|gaanv|gam|gram|ooru|desam|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
     ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना|ghar|makaan|kothi|tola|tolla|haveli|ghar_no|gharno|thikona|thikonna|vilasa|vilaasa"),
-    ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
+    ("DATE", r"date|dated|at|time|timestamp|tithi|theeyathi|theeyati|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
              r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
 FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]

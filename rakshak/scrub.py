@@ -311,7 +311,10 @@ def _name_ok(toks: list[str]) -> bool:
 _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
-                         rf"handed\s+over\s+to|superseded\s+record|old\s+record|merged\s+record|duplicate\s+of|previously\s+registered\s+as|shikayatkarta|shikayatkarta|complainant|aavedak|avedak|prarthi|informant|caller\s*name|"
+                         rf"handed\s+over\s+to|superseded\s+record|old\s+record|merged\s+record|"
+                         rf"(?:copied|taken|cloned|extracted)\s+from(?:\s+the)?(?:\s+(?:chart|record|file|note))?\s+of|"
+                         rf"(?:duplicate|duplicated|copy)\s+(?:(?:chart|record|file|note)\s+)?of|"
+                         rf"previously\s+registered\s+as|shikayatkarta|shikayatkarta|complainant|aavedak|avedak|prarthi|informant|caller\s*name|"
                          rf"शिकायतकर्ता|आवेदक|प्रार्थी|सूचक|(?:complaint|shikayat|request|application|letter|statement|feedback|query)\s+(?:by|from)|"
                          rf"filed\s+by|submitted\s+by|signature|signed|sign\.?|हस्ताक्षर|sahi|regards|from|to|cc|bcc|attn\.?|"
                          rf"raised\s+by|lodged\s+by|written\s+by|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")

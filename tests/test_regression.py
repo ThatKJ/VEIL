@@ -519,6 +519,90 @@ class RegressionTests(unittest.TestCase):
             for leaked in ("UPADHYAY", "Upadhyay", "reema", "5670", "R-2024-A", "Mahee", "Awasthi"):
                 self.assertNotIn(leaked, joined)
 
+    def test_phase10_deva_apostrophe_dates_staff_and_canary_cues(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out1, out2 = root / "input", root / "out1", root / "out2"
+            inp.mkdir()
+            (inp / "summary.md").write_text(
+                "| Rugir naam | चजादम भोई |\n"
+                "| Jonmo tarikh | ०३/०९/२०१७ |\n"
+                "| Bhorti | २५/०७/२०२५ |\n"
+                "| Ruksot | २७/०७/२०२५ |\n"
+                "| Admit2 | 29 Mar '25 |\n"
+                "| Disch2 | 11 Apr '25 |\n"
+                "<!-- copied from the chart of Fozu Xozor -->\n",
+                encoding="utf-8",
+            )
+            (inp / "opd.json").write_text(json.dumps({
+                "patient": {"name": "Chajadam Bhoi", "mrn": "BGH#25#49976"},
+                "seen_by": {"doctor": "Dr. Beeda Pradhan", "assisted_by": {"role": "GNM", "name": "Sr. Puba Hazarika"}},
+            }), encoding="utf-8")
+            (inp / "merge.txt").write_bytes(
+                b"MSH|^~\\&|HIS|H1|HUB|H1|20250902||ADT^A40|M1|P|2.5\r"
+                b"PID|1||BGH#25#49976^^^H1^MR\r"
+                b"MRG|OLD-4174^^^H1^MR\r"
+                b"NTE|1||Duplicate chart of Foza Xuqen merged\r"
+            )
+            self._run_cli(inp, out1, secret="sec-p10-alpha-123")
+            self._run_cli(inp, out2, secret="sec-p10-beta-456")
+
+            md1 = (out1 / "sanitized" / "summary.md").read_text(encoding="utf-8")
+            md2 = (out2 / "sanitized" / "summary.md").read_text(encoding="utf-8")
+            for raw in ("०३/०९/२०१७", "२५/०७/२०२५", "२७/०७/२०२५", "29 Mar '25", "11 Apr '25", "Fozu Xozor"):
+                self.assertNotIn(raw, md1)
+            self.assertNotEqual(md1, md2)
+
+            opd1 = (out1 / "sanitized" / "opd.json").read_text(encoding="utf-8")
+            self.assertIn("Sr. Puba Hazarika", opd1)
+            self.assertIn("Dr. Beeda Pradhan", opd1)
+
+            hl7 = (out1 / "sanitized" / "merge.txt").read_bytes().decode("utf-8")
+            self.assertNotIn("OLD-4174", hl7)
+            self.assertNotIn("Foza Xuqen", hl7)
+
+    def test_phase10_json_keyed_map_and_lenient_jsonl_bounds(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "alt_reg.csv").write_text("UHID,Patient Name\nALT-99881,Ramesh Sharma\n", encoding="utf-8")
+            (inp / "visits.json").write_text(json.dumps({
+                "visit_order": ["VC-UK97820"],
+                "visits": {
+                    "V001": {"uhid": "MR-100", "name": "Mohan Lal", "dx": "Fever"},
+                    "VC-UK97820": {"uhid": "MR-105", "name": "Deepak Rao", "dx": "Sprain"},
+                    "ALT-99881": {"uhid": "MR-101", "name": "Ramesh Sharma", "dx": "Cough"},
+                    "H-88123": {"uhid": "MR-102", "name": "Kamla Devi", "dx": "Asthma"},
+                    "Ramesh": {"uhid": "MR-103", "name": "Sohan Verma", "dx": "Cold"},
+                    "ABCDE1234F": {"uhid": "MR-104", "name": "Anita Nair", "dx": "Rash"},
+                }
+            }), encoding="utf-8")
+            deep_nest = '{"uhid": "M-DEEP", "name": "Raju Das", "x": ' + ('[' * 75) + '1' + (']' * 75) + '}'
+            (inp / "mixed.jsonl").write_text(
+                "{'uhid': 'J-101', 'hesaru': 'Kaveri Rao', note: 'Dx: fever, BP: 120/80',}\n"
+                "{'uhid': 'J-102', 'hesaru': 'Bala Nair', 'tags': {'set_item'}, 'nested': {1: 'Bala Nair'}, 'big': " + ("1" * 120) + "}\n"
+                + deep_nest + "\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-p10-bounds")
+            san_v = (out / "sanitized" / "visits.json").read_text(encoding="utf-8")
+            v_obj = json.loads(san_v)
+            self.assertIn("V001", v_obj["visits"])
+            self.assertIn("VC-UK97820", v_obj["visits"])
+            for leaked_key in ("ALT-99881", "H-88123", "Ramesh", "ABCDE1234F"):
+                self.assertNotIn(leaked_key, san_v)
+            recs_txt = (out / "records.jsonl").read_text(encoding="utf-8")
+            for leaked_key in ("ALT-99881", "H-88123", "Ramesh", "ABCDE1234F"):
+                self.assertNotIn(leaked_key, recs_txt)
+
+            mixed_lines = (out / "sanitized" / "mixed.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(mixed_lines), 3)
+            row0 = json.loads(mixed_lines[0])
+            self.assertEqual(row0["note"], "Dx: fever, BP: 120/80")
+            self.assertNotIn("Bala Nair", mixed_lines[1])
+            self.assertNotIn("Raju Das", mixed_lines[2])
+
 
 if __name__ == "__main__":
     unittest.main()

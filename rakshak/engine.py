@@ -177,18 +177,20 @@ _HI_NAMES = {1: "जनवरी", 2: "फ़रवरी", 3: "मार्च"
 RX_HID = re.compile(r"(?<![\d०-९])([\d०-९]{1,2})\s+(" + "|".join(sorted(_HI_MON, key=len, reverse=True)) + r")\s*,?\s+((?:19|20|१९|२०)[\d०-९]{2})(?![\d०-९])")
 _MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
              "November", "December"]
-RX_DMY = re.compile(r"(?<![\d/.\-])(\d{1,2})([/\-.])(\d{1,2})\2((?:19|20)\d{2}|\d{2})(?![\d/.\-])")
-RX_ISO = re.compile(r"(?<![\d/.\-])((?:19|20)\d{2})([-/.])(\d{2})\2(\d{2})(?![\d/.\-])")
+_ASCII_TO_DEVA = str.maketrans("0123456789", "०१२३४५६७८९")
+_DEVA_DIG_RX = re.compile(r"[\u0966-\u096F]")
+RX_DMY = re.compile(rf"(?<![{INDIC_DIG}/.\-])([{INDIC_DIG}]{{1,2}})([/\-.])([{INDIC_DIG}]{{1,2}})\2((?:19|20|१९|२०|१९|२०)[{INDIC_DIG}]{{2}}|[{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/.\-])")
+RX_ISO = re.compile(rf"(?<![{INDIC_DIG}/.\-])((?:19|20|१९|२०)[{INDIC_DIG}]{{2}})([-/.])([{INDIC_DIG}]{{2}})\2([{INDIC_DIG}]{{2}})(?![{INDIC_DIG}/.\-])")
 RX_ISO8 = re.compile(r"(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")
 RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+(?:of\s+)?)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
-                      r"(,?[\s\-/.]+)((?:19|20)?\d{2})\b")
+                      r"(,?[\s\-/.]+['’]?|['’])((?:19|20)?\d{2})\b")
 RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)([\s\-/]+)(\d{1,2})(st|nd|rd|th)?(,?[\s\-/]+)((?:19|20)\d{2})\b")
 
 
 def date_votes(text: str) -> tuple[int, int]:
     dmy = mdy = 0
     for m in RX_DMY.finditer(text):
-        a, b = int(m.group(1)), int(m.group(3))
+        a, b = int(m.group(1).translate(_INDIC_DIGITS)), int(m.group(3).translate(_INDIC_DIGITS))
         if a > 12 and b <= 12:
             dmy += 1
         elif b > 12 and a <= 12:
@@ -211,7 +213,11 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
     w = wrap or (lambda x: x)
 
     def dmy(m):
-        a, sep, b, y = m.group(1), m.group(2), m.group(3), m.group(4)
+        orig = m.group(0)
+        a = m.group(1).translate(_INDIC_DIGITS)
+        sep = m.group(2)
+        b = m.group(3).translate(_INDIC_DIGITS)
+        y = m.group(4).translate(_INDIC_DIGITS)
         ia, ib = int(a), int(b)
         iy = int(y) if len(y) == 4 else (2000 + int(y) if int(y) <= 30 else 1900 + int(y))
         o = order
@@ -221,25 +227,35 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
             o = "mdy"
         d = _mk(iy, ib, ia) if o == "dmy" else _mk(iy, ia, ib)
         if not d:
-            return m.group(0)
+            return orig
         n = d + delta
         first, second = (n.day, n.month) if o == "dmy" else (n.month, n.day)
         f1 = f"{first:02d}" if len(a) == 2 else str(first)
         f2 = f"{second:02d}" if len(b) == 2 else str(second)
         ys = str(n.year) if len(y) == 4 else f"{n.year % 100:02d}"
+        out_s = f"{f1}{sep}{f2}{sep}{ys}"
+        if _DEVA_DIG_RX.search(orig):
+            out_s = out_s.translate(_ASCII_TO_DEVA)
         if counter is not None:
             counter.append(1)
-        return w(f"{f1}{sep}{f2}{sep}{ys}")
+        return w(out_s)
 
     def iso(m):
-        d = _mk(int(m.group(1)), int(m.group(3)), int(m.group(4)))
+        orig = m.group(0)
+        y = int(m.group(1).translate(_INDIC_DIGITS))
+        mo = int(m.group(3).translate(_INDIC_DIGITS))
+        da = int(m.group(4).translate(_INDIC_DIGITS))
+        d = _mk(y, mo, da)
         if not d:
-            return m.group(0)
+            return orig
         n = d + delta
         sep = m.group(2)
+        out_s = f"{n.year}{sep}{n.month:02d}{sep}{n.day:02d}"
+        if _DEVA_DIG_RX.search(orig):
+            out_s = out_s.translate(_ASCII_TO_DEVA)
         if counter is not None:
             counter.append(1)
-        return w(f"{n.year}{sep}{n.month:02d}{sep}{n.day:02d}")
+        return w(out_s)
 
     def iso8(m):
         d = _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
@@ -253,7 +269,8 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
     def textd(m):
         mon = _MON.get(m.group(4).lower()[:3])
         yy = m.group(7)
-        d = _mk(int(yy) + (2000 if len(yy) == 2 else 0), mon, int(m.group(1)))
+        iy = int(yy) if len(yy) == 4 else (2000 + int(yy) if int(yy) <= 30 else 1900 + int(yy))
+        d = _mk(iy, mon, int(m.group(1)))
         if not d:
             return m.group(0)
         n = d + delta
@@ -309,13 +326,16 @@ def parse_date(s: str, order: str) -> dt.date | None:
     s = s.strip()
     m = RX_ISO.search(s)
     if m:
-        return _mk(int(m.group(1)), int(m.group(3)), int(m.group(4)))
+        return _mk(int(m.group(1).translate(_INDIC_DIGITS)), int(m.group(3).translate(_INDIC_DIGITS)),
+                   int(m.group(4).translate(_INDIC_DIGITS)))
     m = RX_ISO8.search(s)
     if m:
         return _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     m = RX_DMY.search(s)
     if m:
-        a, b, ys = int(m.group(1)), int(m.group(3)), m.group(4)
+        a = int(m.group(1).translate(_INDIC_DIGITS))
+        b = int(m.group(3).translate(_INDIC_DIGITS))
+        ys = m.group(4).translate(_INDIC_DIGITS)
         y = int(ys) if len(ys) == 4 else (2000 + int(ys) if int(ys) <= 30 else 1900 + int(ys))
         if a > 12:
             return _mk(y, b, a)
@@ -325,7 +345,7 @@ def parse_date(s: str, order: str) -> dt.date | None:
     m = RX_TEXTD.search(s)
     if m:
         yy = m.group(7)
-        y = int(yy) + (2000 if len(yy) == 2 else 0)
+        y = int(yy) if len(yy) == 4 else (2000 + int(yy) if int(yy) <= 30 else 1900 + int(yy))
         return _mk(y, _MON[m.group(4).lower()[:3]], int(m.group(1)))
     m = RX_TEXTM.search(s)
     if m:

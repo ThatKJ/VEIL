@@ -1,11 +1,12 @@
 """Two-pass pipeline: parse + harvest -> link -> rewrite -> verify -> report."""
 from __future__ import annotations
 
+import ast
 import csv
 import hashlib
 import io
-import ast
 import json
+import math
 import os
 import re
 import sys
@@ -32,7 +33,7 @@ ID_KINDS = {"MRN", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE"}
 STRUCT_KEYS = {"resourceType", "id", "fullUrl", "reference", "system", "url", "profile", "status", "type", "use",
                "mode", "contentType", "language", "coding", "code", "unit", "versionId", "schema",
                "loinc", "interpretation", "category", "intent", "priority", "valueQuantity", "comparator"}
-GENDER_TOK = {"gender", "sex", "sx", "ling", "लिंग"}
+GENDER_TOK = {"gender", "sex", "sx", "ling", "linga", "aan", "pen", "लिंग"}
 DISTRICT_TOK = {"district", "distt", "jila", "jillo", "जिला", "ज़िला", "zila", "janpad"}
 TEHSIL_TOK = {"tehsil", "तहसील", "तह", "taluka", "taluko", "block", "ta"}
 
@@ -72,7 +73,14 @@ class FileJob:
 
 
 # ================================================================ field kinds
+_RX_GROUP_PATH = re.compile(r"[a-z_][a-z0-9_]{2,}(?:/[a-z_][a-z0-9_]{2,})+")
+
+
 def kind_of_key(key: str) -> str | None:
+    # form-builder group path (grp_patient/age, Kobo/ODK): the leaf names the field when it is known.
+    # Combined labels ('Boyos/Linga') are not paths and keep whole-key classification.
+    if _RX_GROUP_PATH.fullmatch(key) and kind_of_key(key.rsplit("/", 1)[1]) is not None:
+        key = key.rsplit("/", 1)[1]
     toks = L.key_tokens(key)
     if any(t in ("age", "umar", "umra", "आयु", "उम्र", "yr", "yrs", "vaya", "वय") for t in toks) and L.classify_key(key) not in ("DOB", "DATE"):
         return "AGE"
@@ -172,7 +180,9 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     elif kind == "MRN":
         H.add_id(s)
         a = re.sub(r"[^0-9A-Za-z]", "", s).upper()
-        if len(a) >= 4:
+        if _phone_like(a):                       # a contact number in an ID-labelled field links as a phone
+            e["phones"].add(re.sub(r"\D", "", a)[-10:])
+        elif len(a) >= 4:
             e["ids"].add("M:" + a)
             rec.is_patient = True
     elif kind in ("AADHAAR", "ABHA"):
@@ -346,10 +356,10 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         if toks and _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
             H.add_name(" ".join(toks))
             e["rel"].append(toks)
-    id_scan = re.sub(r"(?i)\b(?:https?://[^\s\"'<>?]+|urn:(?:uuid|oid):[\w.\-]+)", " ", text)
+    id_scan = re.sub(r"(?i)\b(?:https?://[^\s\"'<>?]+|urn:(?:uuid|oid):[\w.\-]+|(?:[a-z0-9\-]+\.)+[a-z]{2,6}/[^\s\"'<>?]+)", " ", text)
     for m in RX_IDTOK.finditer(id_scan):
         tok = m.group(0)
-        if id_digits_ok(tok):
+        if id_digits_ok(tok) and not _phone_like(re.sub(r"[^0-9A-Za-z]", "", tok)):
             a = re.sub(r"[^0-9A-Za-z]", "", tok).upper()
             e["ids"].add("M:" + a)
             H.add_id(tok)
@@ -359,7 +369,7 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         digits = re.sub(r"\D", "", tok)
         if len(digits) >= 4 and not re.fullmatch(r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}", tok):
             a = re.sub(r"[^0-9A-Za-z]", "", tok).upper()
-            if len(a) >= 4:
+            if len(a) >= 4 and not _phone_like(a):
                 e["ids"].add("M:" + a)
                 H.add_id(tok)
                 rec.is_patient = True
@@ -537,22 +547,112 @@ def _patient_map(node):
     return bool(common) and _patient_list(sample)
 
 
-_RX_BAREKEY = re.compile(r"([{,]\s*)([A-Za-z_][\w-]{0,40})\s*:")
-_RX_TRAIL = re.compile(r",\s*([}\]])")
+def _phone_like(a: str) -> bool:
+    """An 'identifier' that is really a contact number (optionally +91/0-prefixed, at most 2 letters)."""
+    d = re.sub(r"\D", "", a)
+    return 10 <= len(d) <= 13 and len(a) - len(d) <= 2 and classify_digits(d) == "PHONE"
 
 
-def _lenient_obj(line: str):
+_RX_BAREKEY = re.compile(r"([A-Za-z_][\w-]{0,40})\s*:")
+_RX_LIT_QUOTED_OR_CTL = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|([{,]\s*)([A-Za-z_][\w-]{0,40})\s*:|,\s*([}\]])')
+_LENIENT_MAX_LINE = 20_000
+_LENIENT_MAX_PARSES = 400
+_LENIENT_MAX_BYTES = 1_500_000
+_LENIENT_MAX_NODES = 5_000
+
+
+def _quote_bare_keys(t: str) -> str:
+    """Quote bare identifier keys and drop trailing commas outside string literals."""
+    def repl(m):
+        if m.group(2) is not None:
+            return f'{m.group(1)}"{m.group(2)}":'
+        if m.group(3) is not None:
+            return m.group(3)
+        return m.group(0)
+    return _RX_LIT_QUOTED_OR_CTL.sub(repl, t)
+
+
+def _bracket_depth(t: str) -> int:
+    """Measure unquoted bracket/brace/paren nesting depth before ast.literal_eval."""
+    depth = best = 0
+    q = None
+    esc = False
+    for ch in t:
+        if esc:
+            esc = False
+        elif q:
+            if ch == "\\":
+                esc = True
+            elif ch == q:
+                q = None
+        elif ch in ("'", '"'):
+            q = ch
+        elif ch in "{[(":
+            depth += 1
+            if depth > best:
+                best = depth
+                if best > MAX_JSON_DEPTH:
+                    return best
+        elif ch in "}])":
+            depth = max(0, depth - 1)
+    return best
+
+
+def _json_safe(obj, max_depth: int = MAX_JSON_DEPTH, max_nodes: int = _LENIENT_MAX_NODES) -> bool:
+    """Reject non-JSON Python literals (tuple/set/bytes/complex/Ellipsis), non-str dict keys, huge ints, or deep trees."""
+    nodes = 0
+    stack = [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        if d > max_depth:
+            return False
+        nodes += 1
+        if nodes > max_nodes:
+            return False
+        if o is None or isinstance(o, (bool, str)):
+            continue
+        if isinstance(o, int):
+            if o.bit_length() > 332:  # ~100 decimal digits, safe under json str-digit limit
+                return False
+            continue
+        if isinstance(o, float):
+            if not math.isfinite(o):
+                return False
+            continue
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if not isinstance(k, str):
+                    return False
+                stack.append((v, d + 1))
+            continue
+        if isinstance(o, list):
+            for v in o:
+                stack.append((v, d + 1))
+            continue
+        return False
+    return True
+
+
+def _lenient_obj(line: str, budget: list[int] | None = None):
     """A JSON-Lines row written as a Python dict / JS object literal (single quotes, bare keys,
-    trailing commas). Parsed only with literal parsers, never evaluated; otherwise kept as text."""
+    trailing commas). Parsed only with bounded literal parsers, never evaluated; otherwise kept as text."""
     t = line.strip()
-    if not (t.startswith("{") and t.endswith("}")) or len(t) > 20000:
+    if not (t.startswith("{") and t.endswith("}")) or len(t) > _LENIENT_MAX_LINE:
         return line
-    for cand in (t, _RX_TRAIL.sub(r"\1", _RX_BAREKEY.sub(r'\1"\2":', t))):
+    if budget is not None:
+        if budget[0] >= _LENIENT_MAX_PARSES or budget[1] + len(t) > _LENIENT_MAX_BYTES:
+            return line
+        budget[0] += 1
+        budget[1] += len(t)
+    if _bracket_depth(t) > MAX_JSON_DEPTH:
+        return line
+    quoted = _quote_bare_keys(t)
+    for cand in (t,) if quoted == t else (t, quoted):
         try:
             obj = ast.literal_eval(cand)
         except (ValueError, SyntaxError, MemoryError, RecursionError):
             continue
-        if isinstance(obj, dict) and all(isinstance(k, str) for k in obj):
+        if isinstance(obj, dict) and _json_safe(obj):
             return obj
     return line
 
@@ -772,17 +872,20 @@ def pass1(job: FileJob, H: Harvest):
         if kind == "jsonl":
             job.kind = "jsonl"
             job.data = []
+            lenient_budget = [0, 0]
             for i, line in enumerate(l for l in text.splitlines() if l.strip()):
                 try:
                     obj = json.loads(line)
-                except ValueError:
-                    obj = _lenient_obj(line)
+                    if not isinstance(obj, (dict, list)) or json_depth(obj) > MAX_JSON_DEPTH:
+                        obj = line
+                except (ValueError, RecursionError):
+                    obj = _lenient_obj(line, lenient_budget)
                 job.data.append(obj)
                 r = Rec(job.rel, f"row:{i}")
                 if isinstance(obj, (dict, list)):
                     walk_evidence(obj, None, r, H, job.order)
                 else:
-                    text_evidence(obj, r, H, job.order)
+                    text_evidence(obj if isinstance(obj, str) else line, r, H, job.order)
                 job.recs.append(r)
             return
         if kind == "json":
@@ -891,9 +994,23 @@ def pass1(job: FileJob, H: Harvest):
 
 
 # ================================================================ pass 2 (transform)
+_SAFE_SURROGATE_KEY = re.compile(
+    r"(?i)^(?:vc|v|vis|visit|enc|encounter|rec|record|row|item|case|slot|entry|adm|opd|ipd|tx|seq|ep|episode|pt|sub)"
+    r"(?:\d{1,8}|[_-][0-9a-z]{1,12})$"
+)
+_SAFE_MAP_KEY_TOK = {
+    "visit", "visits", "record", "records", "entry", "entries", "item", "items", "row", "rows", "case", "cases",
+    "slot", "slots", "ward", "bed", "unit", "block", "day", "days", "week", "weeks", "month", "months", "year",
+    "years", "quarter", "note", "notes", "file", "data", "opd", "ipd", "lab", "rx", "ds",
+}
+
+
 class Rewriter:
-    def __init__(self, H: Harvest, sw: Sweeper, stats: Stats, policy: dict):
+    def __init__(self, H: Harvest, sw: Sweeper, stats: Stats, policy: dict,
+                 rec_ids: set[str] | None = None, rec_digs: set[str] | None = None):
         self.H, self.sw, self.st, self.pol = H, sw, stats, policy
+        self.rec_ids = H.ids if rec_ids is None else rec_ids
+        self.rec_digs = H.id_digits if rec_digs is None else rec_digs
 
     def value(self, v, kind, ctx: Ctx, rec: Rec | None):
         st = self.st
@@ -921,6 +1038,8 @@ class Rewriter:
         if not s.strip():
             return s
         if kind == "NAME":
+            if re.match(r"(?i)^\s*(?:dr|sr|sister|nurse|staff\s+nurse|anm|gnm|s/n)\.?\s+", s):
+                return s
             st["identifiers"] += 1
             if len(re.sub(r"\D", "", s)) >= 3:
                 return ctx.psn or "[ID]"
@@ -1010,22 +1129,31 @@ class Rewriter:
         return nk
 
     def key_has_pii(self, k: str, value=None) -> bool:
-        """True only when a record key matches harvested patient evidence (not merely an ID-like shape).
-        A key whose record carries its OWN, different patient identifier is that record's surrogate
-        (visit / encounter code): it is PII only if it also matches a name, phone or national ID."""
+        """True if a record key carries ANY harvested or unharvested PII (MRN/ID, national ID, PAN, phone,
+        email, or patient name token). A key differing from the record's own hospital ID is NOT assumed safe:
+        only keys free of patient-record PII and matching an explicit visit/record surrogate shape keep locators."""
         sw = self.sw
         spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
         norm_k = re.sub(r"[^A-Za-z0-9]", "", k).upper()
-        own_ids = {re.sub(r"[^A-Za-z0-9]", "", str(x)).upper() for x in _mrn_values(value)} if value is not None else set()
-        surrogate = bool(own_ids) and norm_k not in own_ids
-        if not surrogate and (norm_k in self.H.ids or sw.rx_ids.search(k) or sw.rx_digits.search(k)):
+        digs_k = re.sub(r"\D", "", k)
+        if norm_k in self.rec_ids or (len(digs_k) >= 5 and digs_k in self.rec_digs):
             return True
         if sw.rx_lat_full.search(spaced) or sw.rx_dev_full.search(k):
             return True
-        if RX_EMAIL.search(k) or any(classify_digits(m.group(1)) for m in RX_DIGITRUN.finditer(k)):
+        if RX_EMAIL.search(k) or RX_PAN.search(k) or any(classify_digits(m.group(1)) for m in RX_DIGITRUN.finditer(k)):
             return True
-        return bool(re.search(r"[A-Za-z]{3,}", k) and not re.search(r"\d", k)
-                    and (sw.rx_lat_tok.search(spaced) or sw.rx_dev_tok.search(k)) and " " in spaced.strip())
+        if sw.rx_dev_tok.search(k):
+            return True
+        toks = [w.lower() for w in re.split(rf"[^A-Za-z{DEVA}]+", spaced) if w]
+        if any(t in self.H.name_tokens and t not in _SAFE_MAP_KEY_TOK for t in toks):
+            return True
+        if _SAFE_SURROGATE_KEY.fullmatch(k):
+            return False
+        if norm_k in self.H.ids or sw.rx_ids.search(k) or sw.rx_digits.search(k):
+            return True
+        if (RX_IDTOK.fullmatch(k) and id_digits_ok(k)) or len(digs_k) >= 6:
+            return True
+        return False
 
     def schema_key(self, k: str) -> bool:
         """Identifier-style schema keys ("data", "patientInfo", "opd_sessions") are not person names,
@@ -1036,7 +1164,9 @@ class Rewriter:
         spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
         return not (self.sw.rx_lat_full.search(spaced) or self.sw.rx_ids.search(k))
 
-    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None):
+    def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None, depth: int = 0):
+        if depth > MAX_JSON_DEPTH:
+            raise ValueError("too_deep")
         if isinstance(obj, dict):
             rk = res_kind
             rt = obj.get("resourceType")
@@ -1063,22 +1193,22 @@ class Rewriter:
                     ck = "DISTRICT"
                 elif toks & TEHSIL_TOK and isinstance(v, str):
                     ck = "TEHSIL"
-                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk)
+                out[self.key(k, ctx, seen)] = self.walk(v, ck, ctx, rec, rk, depth + 1)
             return out
         if isinstance(obj, list):
             cols = _field_columns(obj)
             if cols:
                 label, value = cols
                 return [{label: self.key(item[label], ctx, set()),
-                         value: self.walk(item[value], child_kind(item[label], kind), ctx, rec, res_kind)}
+                         value: self.walk(item[value], child_kind(item[label], kind), ctx, rec, res_kind, depth + 1)}
                         for item in obj]
             if _pairs(obj):
                 out = []
                 for lab, val in obj:
                     ck = child_kind(lab, kind) if lab not in STRUCT_KEYS else "STRUCT"
-                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind)])
+                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind, depth + 1)])
                 return out
-            return [self.walk(x, kind, ctx, rec, res_kind) for x in obj]
+            return [self.walk(x, kind, ctx, rec, res_kind, depth + 1) for x in obj]
         return self.value(obj, kind, ctx, rec)
 
 
@@ -1156,7 +1286,7 @@ HL7_FIELDS = {("PID", 2): "MRN", ("PID", 3): "MRN", ("PID", 4): "MRN", ("PID", 5
               ("PID", 20): "MRN", ("PID", 21): "MRN", ("NK1", 2): "REL_NAME", ("NK1", 4): "ADDRESS",
               ("NK1", 5): "PHONE", ("NK1", 6): "PHONE", ("PV1", 19): "MRN", ("PV1", 50): "MRN",
               ("IN1", 16): "REL_NAME", ("IN1", 36): "INSURANCE", ("GT1", 3): "REL_NAME", ("GT1", 5): "ADDRESS",
-              ("GT1", 6): "PHONE"}
+              ("GT1", 6): "PHONE", ("MRG", 1): "MRN", ("MRG", 7): "NAME"}
 HL7_DOCTOR = {("PV1", 7), ("PV1", 8), ("PV1", 9), ("PV1", 17), ("OBR", 16), ("OBR", 32), ("ORC", 12), ("TXA", 5)}
 
 
@@ -1506,7 +1636,10 @@ def run(inp: Path, out: Path, policy: dict) -> int:
     plan = P.plan(groups, policy)
 
     sw = Sweeper(H)
-    rw = Rewriter(H, sw, st, policy)
+    rec_ids = ({i.split(":", 1)[1].upper() for r in recs for i in r.ev["ids"] if ":" in i}
+               | {re.sub(r"[^0-9A-Za-z]", "", p) for r in recs for p in r.ev["phones"]})
+    rec_digs = {d for x in rec_ids for d in (re.sub(r"\D", "", x),) if len(d) >= 5}
+    rw = Rewriter(H, sw, st, policy, rec_ids=rec_ids, rec_digs=rec_digs)
     crit = sorted({n for n in H.full_names if len(n) >= 6} | {d for d in H.phones} |
                   {d for d in H.id_digits if len(d) >= 6}, key=len, reverse=True)
     verify_idx = build_verify_index(crit)
