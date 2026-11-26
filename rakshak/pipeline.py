@@ -710,6 +710,8 @@ def pass1(job: FileJob, H: Harvest):
     job.text = text
     job.crlf = "\r\n" in text[:2000]
     kind = sniff_kind(job.ext, text)
+    if RX_HL7.match(text):
+        kind = "text"            # handled field-by-field below (structure preserved)
     if kind == "unsupported":
         job.status, job.reason = "quarantined", "unsupported_format"
         return
@@ -836,6 +838,8 @@ def pass1(job: FileJob, H: Harvest):
         else:
             job.kind = "text"
             r = Rec(job.rel, "doc")
+            if RX_HL7.match(text):
+                hl7_evidence(text, r, H)
             text_evidence(text, r, H, job.order)
             job.recs.append(r)
             job.doc_rec = r
@@ -1079,6 +1083,114 @@ def kv_rewrite(text: str, rw, ctx, rec) -> str:
         out.append(str(nv))
         last = b
     out.append(text[last:])
+    return "".join(out)
+
+
+# ================================================================ HL7 v2 (pipe-delimited segments)
+RX_HL7 = re.compile(r"\A\ufeff?\s*MSH\|")
+RX_TS = re.compile(r"^((?:19|20)\d{6})(\d{2,6}(?:\.\d+)?)?([+\-]\d{4})?$")
+# (segment, field number) -> kind; field numbers follow HL7 v2.x (MSH counts its separator as field 1)
+HL7_FIELDS = {("PID", 2): "MRN", ("PID", 3): "MRN", ("PID", 4): "MRN", ("PID", 5): "NAME", ("PID", 6): "REL_NAME",
+              ("PID", 7): "DOB", ("PID", 8): "GENDER", ("PID", 9): "NAME", ("PID", 11): "ADDRESS",
+              ("PID", 13): "PHONE", ("PID", 14): "PHONE", ("PID", 18): "MRN", ("PID", 19): "AADHAAR",
+              ("PID", 20): "MRN", ("PID", 21): "MRN", ("NK1", 2): "REL_NAME", ("NK1", 4): "ADDRESS",
+              ("NK1", 5): "PHONE", ("NK1", 6): "PHONE", ("PV1", 19): "MRN", ("PV1", 50): "MRN",
+              ("IN1", 16): "REL_NAME", ("IN1", 36): "INSURANCE", ("GT1", 3): "REL_NAME", ("GT1", 5): "ADDRESS",
+              ("GT1", 6): "PHONE"}
+HL7_DOCTOR = {("PV1", 7), ("PV1", 8), ("PV1", 9), ("PV1", 17), ("OBR", 16), ("OBR", 32), ("ORC", 12), ("TXA", 5)}
+
+
+def _hl7_segments(text):
+    return re.split(r"(\r\n|\r|\n)", text)
+
+
+def _hl7_name(v):
+    parts = [p for p in v.split("^")[:3] if p.strip()]
+    return " ".join(parts[1:] + parts[:1]) if parts else ""
+
+
+def hl7_evidence(text, rec, H):
+    for seg in _hl7_segments(text):
+        f = seg.split("|")
+        sid = f[0].strip()
+        for i, v in enumerate(f[1:], 1):
+            k = HL7_FIELDS.get((sid, i))
+            if not k or not v.strip():
+                continue
+            for rep in v.split("~"):
+                comp = rep.split("^")
+                if k in ("NAME", "REL_NAME"):
+                    add_ev(rec, H, k, _hl7_name(rep))
+                elif k == "MRN":
+                    typ = comp[4].upper() if len(comp) > 4 else ""
+                    add_ev(rec, H, "AADHAAR" if typ in ("NI", "NNIND", "UID") or len(re.sub(r"\D", "", comp[0])) == 12 else "MRN", comp[0])
+                elif k == "DOB":
+                    m = RX_TS.match(comp[0])
+                    if m:
+                        d = m.group(1)
+                        add_ev(rec, H, "DOB", f"{d[:4]}-{d[4:6]}-{d[6:8]}")
+                elif k == "GENDER":
+                    g = gender_of(comp[0])
+                    if g:
+                        rec.ev["gender"] = g
+                elif k in ("PHONE", "AADHAAR", "INSURANCE"):
+                    add_ev(rec, H, k, comp[0])
+
+
+def _hl7_shift(v, days):
+    m = RX_TS.match(v)
+    if not m or not days:
+        return v
+    import datetime as _dt
+    d = m.group(1)
+    try:
+        n = _dt.date(int(d[:4]), int(d[4:6]), int(d[6:8])) + _dt.timedelta(days=days)
+    except ValueError:
+        return v
+    return n.strftime("%Y%m%d") + (m.group(2) or "") + (m.group(3) or "")
+
+
+def hl7_rewrite(text, rw, ctx, rec, sw):
+    out = []
+    for seg in _hl7_segments(text):
+        if seg in ("\r\n", "\r", "\n") or not seg:
+            out.append(seg)
+            continue
+        f = seg.split("|")
+        sid = f[0].strip()
+        if sid == "MSH":                 # separators, routing, type: keep; MSH-7 (message time) shifts per patient
+            if len(f) > 6:
+                f[6] = _hl7_shift(f[6], ctx.days)
+            out.append("|".join(f))
+            continue
+        nf = [f[0]]
+        for i, v in enumerate(f[1:], 1):
+            k = HL7_FIELDS.get((sid, i))
+            if (sid, i) in HL7_DOCTOR or not v:
+                nf.append(v)
+            elif k:
+                reps = []
+                for rep in v.split("~"):
+                    comp = rep.split("^")
+                    if k in ("NAME", "REL_NAME", "MRN", "AADHAAR", "INSURANCE"):
+                        tok = rw.value(comp[0] if k not in ("NAME", "REL_NAME") else _hl7_name(rep) or comp[0], k, ctx, rec)
+                        comp = [str(tok)] + [c if j >= 3 else "" for j, c in enumerate(comp[1:], 1)]
+                    elif k == "DOB":
+                        comp[0] = "" if ctx.rule is not None and ctx.rule.dob == "year_drop" else _hl7_shift(comp[0], ctx.days)
+                    elif k == "ADDRESS":
+                        # XAD component order varies between senders: keep only known district/tehsil names
+                        # and 2-3 letter state/country codes; drop street, locality, village and PIN.
+                        comp = [c if (norm(c) in rw.H.safe_places or re.fullmatch(r"[A-Z]{2,3}", c)) else "" for c in comp]
+                    elif k == "PHONE":
+                        comp = ["[PHONE]"] + ["" for _ in comp[1:3]]
+                    reps.append("^".join(comp))
+                nf.append("~".join(reps))
+            else:
+                parts = []
+                for c in v.split("^"):
+                    parts.append(_hl7_shift(c, ctx.days) if RX_TS.match(c) else scrub_text(c, ctx, sw))
+                nf.append("^".join(parts))
+        out.append("|".join(nf))
     return "".join(out)
 
 
@@ -1430,7 +1542,10 @@ def run(inp: Path, out: Path, policy: dict) -> int:
               else:
                   r = j.doc_rec
                   c = ctx_for(r, j)
-                  result = scrub_text(kv_rewrite(j.text, rw, c, r), c, sw)
+                  if RX_HL7.match(j.text):
+                      result = hl7_rewrite(j.text, rw, c, r, sw)
+                  else:
+                      result = scrub_text(kv_rewrite(j.text, rw, c, r), c, sw)
                   if r is not None and r.pid and r.pid not in result:
                       result = f"Patient: {r.pid}\n" + result
               if str(policy.get("verify", "on")) != "off":     # ablation switch; always on in config

@@ -22,6 +22,32 @@ class RegressionTests(unittest.TestCase):
             check=True, capture_output=True, env=env,
         )
 
+    def test_hl7_v2_adt_fields_are_structured_and_structure_preserved(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            msg = ("MSH|^~\\&|HIS|H1|HUB|H1|202402100915||ADT^A04|53338764|P|2.5\r"
+                   "EVN|A04|202402100915\r"
+                   "PID|1||JDH25OP47912^^^JDH^MR~886964861767^^^UIDAI^NI||RABHA^Nashi||19241110|F|||"
+                   "Gh. No. 21^Bhodush Ali^Dhupilmunda Dakhin^Sambalpur^AS^768073^IN||+918017094700^PRN^CP\r"
+                   "NK1|1|RABHA^Kheebigir|SPO^spouse\r"
+                   "PV1|1|O|OPD^^^JDH||||D565^Mara^Bhoi|||MED\r")
+            (inp / "adt.txt").write_text(msg, encoding="utf-8", newline="")
+            self._run_cli(inp, out)
+            files = [p for p in (out / "sanitized").rglob("*") if p.is_file()]
+            text = files[0].read_text(encoding="utf-8")
+            segs = text.split("\r")
+            self.assertTrue(segs[0].startswith("MSH|^~\\&|HIS"))
+            pid = next(x for x in segs if x.startswith("PID|")).split("|")
+            self.assertEqual(len(pid), 14)                                  # field count preserved
+            for raw in ("RABHA", "Nashi", "886964861767", "JDH25OP47912", "8017094700", "768073", "Dhupilmunda",
+                        "Kheebigir", "19241110"):
+                self.assertNotIn(raw, text)
+            self.assertIn("D565^Mara^Bhoi", text)                          # attending doctor kept
+            rows = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(rows[0]["patient"] and rows[0]["patient"] in text)
+
     def test_national_id_typo_is_not_a_conflict_but_different_ids_are(self):
         from rakshak.linker import _one_edit, compatible, Cluster
         base = {"names": [["Vakeneel", "Grewal"]], "rel": [], "ids": set(), "phones": set(), "dob": "1990-02-17",
