@@ -48,23 +48,23 @@ pre{font:10pt/1.15 Menlo,monospace;background:#f8fafc;border:1px solid #e2e8f0;p
 <table>
 <thead><tr><th>Evaluation (Local Harness)</th><th>Role</th><th class="num">Leak (Can)</th><th class="num">Med / Prb</th><th class="num">F0.5 (FM)</th><th class="num">Priv / Est</th></tr></thead>
 <tbody>
-<tr><td><code>dev</code> (<code>34.6MB / 0.69s</code>)</td><td>Official (<code>A1–A7</code>)</td><td class="num">0.0% (0/4)</td><td class="num">98.1% / .993</td><td class="num">1.00 (0)</td><td class="num">.869 / <b>92.31</b></td></tr>
+<tr><td><code>dev</code> (<code>0.55s / check 0.5s</code>)</td><td>Official (<code>A1–A7</code>)</td><td class="num">0.0% (0/4)</td><td class="num">98.1% / .993</td><td class="num">1.00 (0)</td><td class="num">.859 / <b>92.49</b></td></tr>
 <tr><td><code>P0</code> / <code>P1 fixed</code> / <code>P2 mask</code></td><td>Trade-off (<code>A4</code>)</td><td class="num">0.0% (0/4)</td><td class="num">.993 vs .999</td><td class="num">1.00 (0)</td><td class="num"><b>91.95</b>/88.4/85.1</td></tr>
-<tr><td><code>H18</code> / <code>H19</code> / <code>H21</code></td><td>Diag (Assam/KA/KL)</td><td class="num">0.0–0.7% (0)</td><td class="num"><b>99.9–100%</b></td><td class="num">.97–1.0 (0)</td><td class="num">87.2/93.5/89.2</td></tr>
-<tr><td><b>Blind (<code>9601,9603–04</code>)</b></td><td>Frozen vs <code>kg9</code></td><td class="num">0.01–0.11%</td><td class="num">.995–1.000</td><td class="num">.95–1.0 (<b>0</b>)</td><td class="num"><b>91.87</b> mean</td></tr>
+<tr><td><code>H19</code> / <code>H20</code> / <code>H21</code></td><td>Diag (KA/HR/KL)</td><td class="num">0.0–0.3% (0)</td><td class="num"><b>100%</b> (.751 H20)</td><td class="num">.988–.989 (<b>0</b>)</td><td class="num">87–95+ w/perf</td></tr>
+<tr><td><b>Blind (<code>9901–9904</code>)</b></td><td>Frozen vs <code>kg12</code></td><td class="num">0.00–0.07%</td><td class="num">.996–1.000</td><td class="num">.975–.990</td><td class="num"><b>92.99</b> (+0.34)</td></tr>
 </tbody>
 </table>
-<p><b>Tournaments &amp; trade-offs:</b> <code>P0</code> (<code>arx_k5_dist_drop=on</code>) drops 92 <code>dev</code> districts (<code>1.9%</code> <code>check_dev</code> utility) to slash <code>A4</code> profile re-ID from <code>0.915</code> (<code>mask</code>) and <code>0.723</code> (<code>fixed</code>) to <code>0.192</code>. Selective <code>52.2 KB</code> <code>python-crfsuite</code> (<code>+0.000</code> recall) and Rust <code>ahocorasick_rs</code> (<code>13.15s</code> vs Python <code>12.79s</code>) were rejected via E2E ablation.</p>
+<p><b>Tournaments &amp; trade-offs:</b> <code>P0</code> (<code>arx_k5_dist_drop=on</code>) drops 92 <code>dev</code> districts (<code>1.9%</code> <code>check_dev</code> utility) to slash <code>A4</code> profile re-ID from <code>0.915</code> (<code>mask</code>) and <code>0.723</code> (<code>fixed</code>) to <code>0.192</code>. Selective <code>python-crfsuite</code> (<code>+0.000</code> recall) and <code>ahocorasick_rs</code> were rejected via E2E ablation; bounded 2-CPU <code>fork</code> CoW Pass-2 stays deterministic byte-for-byte.</p>
 
 <h2>5. Runtime, memory scaling &amp; Assurance Engine 3.0</h2>
 <ul>
-<li><b>Scale (&lt;4,096 MB / &lt;900s):</b> Scalar-first <code>Linker</code> &amp; streaming chunk release run <code>100k_unique</code> in <b>12.38s / 516.9 MB</b>, <code>500k_repeat</code> in <b>55.59s / 1,766.6 MB</b>, <code>1M_repeat</code> in <b>113.16s / 3,206.6 MB</b>, <b>1M unique in 128.93s / 3,176.2 MB</b> (<code>7,756 rows/s</code>, <code>0</code> collisions), and <b>1.25M mixed (<code>6,252</code> files, <code>943,750</code> physical records) in 682.76s / 2,928.4 MB</b>.</li>
-<li><b>Assurance 3.0 (<code>tools/veil_passport.py</code>, <code>41/41</code> tests, <code>180/180</code> Hypothesis properties):</b> Truth-free audit passes all 5 checks on <code>dev</code>: <code>structural 200/200</code>, <code>privacy 197/197</code> (40 institutional strings), <code>clinical 2361/2361</code>, <code>temporal 724/724</code> (<code>48/48</code> patient chronology), <code>identity 774/774</code>.</li>
+<li><b>Scale (&lt;4,096 MB / &lt;900s):</b> Compact <code>__slots__</code> structures, memoized evidence, O(L) rarest-gram indexing &amp; LPT 2-CPU fork run <code>100k_unique</code> in <b>5.54s / 374.8 MB</b>, <code>500k_repeat</code> in <b>22.21s / 862.9 MB</b>, <code>1M_repeat</code> in <b>41.75s / 1,818.6 MB</b>, <b>1M unique in 56.44s / 2,481.1 MB</b> (<code>17,718 rows/s</code>), and <b>1.25M mixed (<code>6,252</code> files, <code>943,750</code> physical records) in 90.37s / 1,623.8 MB</b>.</li>
+<li><b>Assurance 3.0 (<code>tools/veil_passport.py</code>, <code>47/47</code> unit/torture tests):</b> Truth-free audit passes all 5 checks on <code>dev</code>: <code>structural 200/200</code>, <code>privacy 197/197</code> (40 institutional strings), <code>clinical 2361/2361</code>, <code>temporal 724/724</code> (<code>48/48</code> patient chronology), <code>identity 774/774</code>.</li>
 </ul>
 
 <h2>6. Honest limitations</h2>
 <ul>
 <li><b>Security &amp; adversarial boundary:</b> Tested against <code>ATTACKS.md</code> and local invariants on macOS Python 3.14 (Docker inactive); no finite test proves anonymity, and rare ICD-10 + LOS preservation keeps rare-profile <code>A5</code> non-zero.</li>
-<li><b>Conservative linkage &amp; substring false positives:</b> Unsupported non-Indian scripts and ambiguous singletons abstain (<code>0</code> false merges); local substring audits still flag doctor names or lab counts overlapping patient keys (<code>blind_east_hl7</code> = <code>84.23</code> diagnostic).</li>
+<li><b>Conservative linkage &amp; shared landlines:</b> Unsupported scripts &amp; ambiguous singletons abstain; rare shared household STD landlines caused <code>FM=3</code> in blind <code>9904</code> (net <code>+1.37</code>, vs <code>FM=32</code> shared baseline on <code>9903</code>), and local substring audits flag benign lab counts/doctors.</li>
 </ul>
 </body></html>
