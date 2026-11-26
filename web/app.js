@@ -196,8 +196,20 @@
         <td class="mono">${esc(r.canaries)}</td>
       </tr>`).join("");
     $("hist-table").innerHTML = `
-      <thead><tr><th>Dataset</th><th>Role</th><th>Est. Score</th><th>PII Leak</th><th>False Merges</th><th>Canaries</th></tr></thead>
+      <thead><tr><th>Dataset</th><th>Classification</th><th>Est. Total (Local)</th><th>Truth Leak</th><th>False Merges</th><th>Canaries</th></tr></thead>
       <tbody>${rows}</tbody>`;
+    if (hb.scalability && $("scale-table")) {
+      $("scale-table").innerHTML = `
+        <thead><tr><th>Topology Workload</th><th>Records</th><th>Wall Time</th><th>Peak RSS</th><th>Throughput</th></tr></thead>
+        <tbody>${hb.scalability.map((s) => `
+          <tr>
+            <td class="mono">${esc(s.workload)}</td>
+            <td class="mono">${esc(s.records)}</td>
+            <td class="mono">${esc(s.wall_s)}s</td>
+            <td class="mono">${esc(s.peak_rss_mb)} MB</td>
+            <td class="mono">${esc(s.throughput)}</td>
+          </tr>`).join("")}</tbody>`;
+    }
   }
 
   function renderOverview(d, rep, pass, residue) {
@@ -513,11 +525,21 @@
         ? `RELEASE AUDIT PASSED: 0 residual identifier hits across ${activeAudit.privacy.channels_scanned} channels · ${activeAudit.clinical.protected_values_kept_pct}% protected clinical expressions preserved · ${activeAudit.structural.exported}/${activeAudit.structural.input_files} sanitized (${activeAudit.structural.quarantined} quarantined).`
         : `REVIEW REQUIRED: ${esc(risks.join(" | "))}`;
 
+    const checks = activeAudit.checks || {};
+    const statusBadge = (s) => s === "PASS" ? "badge-ok" : (s === "FAIL" ? "badge-fail" : (s === "WARNING" ? "badge-warn" : "badge-slate"));
+    $("passport-checks").innerHTML = Object.entries(checks).map(([name, c]) => `
+      <div class="kpi-card">
+        <div class="meta-row"><span class="kpi-label">${esc(name)}</span><span class="badge ${statusBadge(c.status)}">${esc(c.status)}</span></div>
+        <div class="kpi-val" style="font-size:19px">${esc(c.coverage)}</div>
+        <div class="kpi-sub">${esc(c.detail)}</div>
+      </div>`).join("");
+
     const pillars = [
       ["A · Privacy Residue", activeAudit.privacy],
-      ["B · Clinical & Temporal", activeAudit.clinical],
-      ["C · Identity Integrity", activeAudit.identity],
-      ["D · Structural Integrity", activeAudit.structural],
+      ["B · Clinical Occurrences", activeAudit.clinical],
+      ["C · Temporal & FHIR", activeAudit.temporal || {}],
+      ["D · Record-Level Identity", activeAudit.identity],
+      ["E · Structural Integrity", activeAudit.structural],
     ];
     $("passport-pillars").innerHTML = pillars.map(([title, obj]) => `
       <div class="pillar-card">
@@ -526,6 +548,17 @@
           ${Object.entries(obj).map(([k, v]) => `<tr><th>${esc(k.replace(/_/g, " "))}</th><td class="mono">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</td></tr>`).join("")}
         </table>
       </div>`).join("");
+
+    const hist = d.verification_history || [];
+    $("passport-history-table").innerHTML = `
+      <thead><tr><th>Time</th><th>Event</th><th>State</th><th>Details</th></tr></thead>
+      <tbody>${hist.map((h) => `
+        <tr>
+          <td class="mono">${esc(h.timestamp)}</td>
+          <td><strong>${esc(h.event)}</strong></td>
+          <td><span class="badge ${statusBadge(h.status)}">${esc(h.status)}</span></td>
+          <td>${esc(h.summary)}</td>
+        </tr>`).join("")}</tbody>`;
   }
 
   $("btn-corrupt-demo").addEventListener("click", async () => {
@@ -533,6 +566,7 @@
       setStatus("Testing Defect Detection...", "status-warn");
       const res = await apiJson("/api/passport/corrupt", { method: "POST" });
       state.data.corrupted_passport = res.corrupted_passport;
+      if (res.verification_history) state.data.verification_history = res.verification_history;
       renderPassport(state.data);
       setStatus("Defect Caught!", "status-fail");
     } catch (err) {
@@ -546,6 +580,7 @@
       const res = await apiJson("/api/passport/repair", { method: "POST" });
       state.data.corrupted_passport = null;
       state.data.passport = res.passport;
+      if (res.verification_history) state.data.verification_history = res.verification_history;
       renderPassport(state.data);
       setStatus("Repaired & Verified", "status-ok");
     } catch (err) {

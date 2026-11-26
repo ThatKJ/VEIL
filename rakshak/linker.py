@@ -26,19 +26,26 @@ def _strip_fused_suffix(tl: str) -> str:
     return tl
 
 
+_ES: frozenset = frozenset()
+_RX_INIT_RUN = re.compile(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?")
+_RX_INIT_CHR = re.compile(r"[A-Za-z]")
+_RX_NON_INDIC = re.compile(r"[^0-9a-z\u0B00-\u0DFF]")
+_RX_VILL_SPLIT = re.compile(r"[\s,._\-]+")
+
+
 def name_keys(tokens: list[str]) -> tuple[str, ...]:
     # Pre-count non-generic tokens >= 2 chars so surname-capable generics (e.g. Begum, Singh)
     # are dropped as middle titles ("Shanti Devi Verma") yet preserved when functioning as surname ("S.D. Begum").
     non_gen2 = 0
     for t in tokens:
-        if not re.fullmatch(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", t):
+        if not _RX_INIT_RUN.fullmatch(t):
             tl = t.strip(".").lower()
             if tl not in L.GENERIC_NAME_TOKENS and len(tl) >= 2:
                 non_gen2 += 1
     ks = []
     for t in tokens:
-        if re.fullmatch(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", t):
-            for ch in re.findall(r"[A-Za-z]", t):
+        if _RX_INIT_RUN.fullmatch(t):
+            for ch in _RX_INIT_CHR.findall(t):
                 ks.append(ch.lower())
             continue
         tl = t.strip(".").lower()
@@ -51,14 +58,14 @@ def name_keys(tokens: list[str]) -> tuple[str, ...]:
         if s and (len(s) >= 2 or len(tl) >= 2):
             ks.append(s)
         elif not s:
-            u = re.sub(r"[^0-9a-z\u0B00-\u0DFF]", "", tl)
+            u = _RX_NON_INDIC.sub("", tl)
             if len(u) >= 2 and not u.isdigit():
                 ks.append("~" + u)
     return tuple(ks)
 
 
 def _vill_key(v: str) -> str:
-    toks = [L.skel(w) for w in re.split(r"[\s,._\-]+", v.strip()) if w]
+    toks = [L.skel(w) for w in _RX_VILL_SPLIT.split(v.strip()) if w]
     return " ".join(t for t in toks if t) or v.strip().casefold()
 
 
@@ -67,31 +74,59 @@ class Cluster:
 
     def __init__(self, idx: int, ev: dict):
         self.members = [idx]
-        self.names = {k for k in (name_keys(n) for n in ev["names"]) if k}
-        self.given = {k[0] for k in self.names}
-        self.rels = {k for k in (name_keys(n) for n in ev["rel"]) if k}
-        self.dobs = {ev["dob"]} if ev["dob"] else set()
-        self.dob_yrs = {int(ev["dob"][:4])} if (ev["dob"] and len(ev["dob"]) >= 4 and ev["dob"][:4].isdigit()) else set()
-        self.genders = {ev["gender"]} if ev["gender"] else set()
-        self.ages = {ev["age"]} if ev["age"] is not None else set()
-        self.byears: set[int] = set()
-        if ev["age"] is not None and isinstance(ev.get("date"), int) and ev["date"] >= 2020:
-            self.byears.add(ev["date"] - ev["age"])
-        self.villages = {_vill_key(ev["village"])} if ev.get("village") else set()
-        self.ids = set(ev["ids"]) | {"P:" + p for p in ev["phones"]}
+        if ev["names"]:
+            self.names = {k for k in (name_keys(n) for n in ev["names"]) if k} or _ES
+            self.given = {k[0] for k in self.names} if self.names else _ES
+        else:
+            self.names = _ES
+            self.given = _ES
+        self.rels = ({k for k in (name_keys(n) for n in ev["rel"]) if k} or _ES) if ev["rel"] else _ES
+        dob = ev["dob"]
+        if dob:
+            self.dobs = {dob}
+            self.dob_yrs = {int(dob[:4])} if (len(dob) >= 4 and dob[:4].isdigit()) else _ES
+        else:
+            self.dobs = _ES
+            self.dob_yrs = _ES
+        self.genders = {ev["gender"]} if ev["gender"] else _ES
+        age = ev["age"]
+        if age is not None:
+            self.ages = {age}
+            dt_yr = ev.get("date")
+            self.byears = {dt_yr - age} if isinstance(dt_yr, int) and dt_yr >= 2020 else _ES
+        else:
+            self.ages = _ES
+            self.byears = _ES
+        self.villages = {_vill_key(ev["village"])} if ev.get("village") else _ES
+        if ev["ids"] or ev["phones"]:
+            s = set(ev["ids"])
+            for p in ev["phones"]:
+                s.add("P:" + p)
+            self.ids = s
+        else:
+            self.ids = _ES
 
     def absorb(self, o: "Cluster"):
         self.members += o.members
-        self.names |= o.names
-        self.given |= o.given
-        self.rels |= o.rels
-        self.dobs |= o.dobs
-        self.dob_yrs |= o.dob_yrs
-        self.genders |= o.genders
-        self.ages |= o.ages
-        self.byears |= o.byears
-        self.villages |= o.villages
-        self.ids |= o.ids
+        if o.names:
+            self.names = (set(self.names) if self.names is _ES else self.names) | o.names
+            self.given = (set(self.given) if self.given is _ES else self.given) | o.given
+        if o.rels:
+            self.rels = (set(self.rels) if self.rels is _ES else self.rels) | o.rels
+        if o.dobs:
+            self.dobs = (set(self.dobs) if self.dobs is _ES else self.dobs) | o.dobs
+        if o.dob_yrs:
+            self.dob_yrs = (set(self.dob_yrs) if self.dob_yrs is _ES else self.dob_yrs) | o.dob_yrs
+        if o.genders:
+            self.genders = (set(self.genders) if self.genders is _ES else self.genders) | o.genders
+        if o.ages:
+            self.ages = (set(self.ages) if self.ages is _ES else self.ages) | o.ages
+        if o.byears:
+            self.byears = (set(self.byears) if self.byears is _ES else self.byears) | o.byears
+        if o.villages:
+            self.villages = (set(self.villages) if self.villages is _ES else self.villages) | o.villages
+        if o.ids:
+            self.ids = (set(self.ids) if self.ids is _ES else self.ids) | o.ids
 
 
 def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
@@ -120,9 +155,12 @@ def _near(u: str, v: str) -> bool:
 
 def _given_conflict(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
     """Two full names sharing a family/house name but with outright different remaining given names
-    ('Kizhakkethil Dheerubi' vs 'Kizhakkethil Bedham'): relatives, not one person."""
-    ux = [t for t in x if len(t) >= 2 and t not in y]
-    uy = [t for t in y if len(t) >= 2 and t not in x]
+    ('Kizhakkethil Dheerubi' vs 'Kizhakkethil Bedham'): relatives, not one person.
+    Never conflict across untransliterated non-Latin ('~...') tokens."""
+    if any(t.startswith("~") for t in x) != any(t.startswith("~") for t in y):
+        return False
+    ux = [t for t in x if len(t) >= 2 and not t.startswith("~") and t not in y]
+    uy = [t for t in y if len(t) >= 2 and not t.startswith("~") and t not in x]
     if ux and uy and not any(_near(u, v) for u in ux for v in uy):
         return True
     # initials-first names ('K. P. Dapee'): the first initial abbreviates the family/house name,
@@ -241,6 +279,7 @@ class Linker:
             ri, rj, a, b = rj, ri, b, a
         a.absorb(b)
         self.parent[rj] = ri
+        self.cl[rj] = None
         return True
 
     def run(self) -> list[int]:

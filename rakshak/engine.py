@@ -43,8 +43,8 @@ def hk(*parts: str) -> bytes:
 
 
 def pseudonym(key: str) -> str:
-    n = int.from_bytes(hk("psn", key)[:5], "big")
-    return "PSN-" + "".join(_ALPH[(n >> (5 * i)) & 31] for i in range(6))
+    n = int.from_bytes(hk("psn", key)[:7], "big")
+    return "PSN-" + "".join(_ALPH[(n >> (5 * i)) & 31] for i in range(10))
 
 
 def shift_days(key: str, max_days: int) -> int:
@@ -58,7 +58,21 @@ def opaque(kind: str, value: str, n: int = 6) -> str:
     return "".join(_ALPH[(d >> (5 * i)) & 31] for i in range(n))
 
 
+_RX_NON_DIG = re.compile(r"\D+")
+_RX_NON_ALNUM = re.compile(r"[^0-9A-Za-z]")
+_RX_DIG5 = re.compile(r"\d{5,}")
+_RX_WS_SPLIT = re.compile(r"[ \t]+")
+_RX_SEP_SPLIT = re.compile(r"[\s,/]+")
+_RX_AGE_NUM = re.compile(r"\d{1,3}")
+_RX_PLACE_CAP = re.compile(rf"[A-Z{DEVA}]")
+
+
 def norm(s: str) -> str:
+    if s.isascii():
+        sl = s.lower()
+        if "  " not in sl and "\t" not in sl and "\n" not in sl and sl == sl.strip():
+            return sl
+        return " ".join(sl.split())
     return " ".join(unicodedata.normalize("NFKC", s).casefold().split())
 
 
@@ -477,7 +491,7 @@ _HON_LEAD = re.compile(rf"^(?:{L.HONORIFIC_BEFORE})$", re.I)
 
 def clean_name_seq(seq: str) -> list[str]:
     toks = []
-    for t in re.split(r"[ \t]+", seq.strip()):
+    for t in _RX_WS_SPLIT.split(seq.strip()):
         tl = t.strip(".,;:'’").lower()
         if not tl or tl in STOP_WORDS:
             break
@@ -503,9 +517,9 @@ class Harvest:
     def add_name(self, value: str):
         if not value or not isinstance(value, str):
             return
-        v = re.sub(rf"(?i)\b{L.HONORIFIC_BEFORE}\s+", " ", value)
-        v = re.sub(r"(?i)\b(?:S/O|D/O|W/O|H/O|C/O)\b\.?", " ", v)
-        toks = [t.strip(".,;:()'’") for t in re.split(r"[\s,/]+", v) if t.strip(".,;:()'’")]
+        v = _RX_HON_SPACE.sub(" ", value)
+        v = _RX_KIN_SPACE.sub(" ", v)
+        toks = [t.strip(".,;:()'’") for t in _RX_SEP_SPLIT.split(v) if t.strip(".,;:()'’")]
         toks = [t for t in toks if not t.isdigit() and len(t) > 1]
         if not toks or len(toks) > 6:
             return
@@ -514,7 +528,7 @@ class Harvest:
         for t in toks:
             tl = t.lower()
             if (tl in L.GENERIC_NAME_TOKENS or tl in COMMON_WORDS or tl in L.MED_ACRONYMS
-                    or len(tl) < 3 and not re.search(rf"[{DEVA}]", t)):
+                    or len(tl) < 3 and not _DEVA_CHAR_RX.search(t)):
                 continue
             self.name_tokens.add(tl)
             s = L.skel(t)
@@ -525,19 +539,19 @@ class Harvest:
         v = str(value).strip()
         if not v:
             return
-        a = re.sub(r"[^0-9A-Za-z]", "", v).upper()
+        a = _RX_NON_ALNUM.sub("", v).upper()
         if len(a) >= 5:
             self.ids.add(a)
-        d = re.sub(r"\D", "", v)
+        d = _RX_NON_DIG.sub("", v)
         if len(d) >= 5:
             self.id_digits.add(d)
-        for g in re.findall(r"\d{5,}", v):
+        for g in _RX_DIG5.findall(v):
             self.id_digits.add(g)
 
     def add_place(self, value: str):
         if isinstance(value, str) and value.strip() and not value.strip().isdigit():
             n = norm(value.strip(" ,."))
-            if len(n) >= 4 and n not in COMMON_WORDS and n not in STOP_WORDS and re.search(rf"[A-Z{DEVA}]", value):
+            if len(n) >= 4 and n not in COMMON_WORDS and n not in STOP_WORDS and _RX_PLACE_CAP.search(value):
                 self.places.add(n)
 
 
@@ -556,15 +570,20 @@ class Rec:
 
 def gender_of(v) -> str | None:
     s = str(v).strip().lower()
-    if s in ("m", "male", "पुरुष", "purush", "man", "boy"):
+    if s in ("m", "male", "पुरुष", "purush", "purushan", "aan", "man", "boy"):
         return "M"
-    if s in ("f", "female", "महिला", "mahila", "woman", "girl", "स्त्री"):
+    if s in ("f", "female", "महिला", "mahila", "woman", "girl", "स्त्री", "sthree", "stree", "pen"):
         return "F"
     return None
 
 
+_RX_HON_SPACE = re.compile(rf"(?i)\b{L.HONORIFIC_BEFORE}\s+")
+_RX_KIN_SPACE = re.compile(r"(?i)\b(?:S/O|D/O|W/O|H/O|C/O)\b\.?")
+_DEVA_CHAR_RX = re.compile(rf"[{DEVA}]")
+
+
 def age_of(v) -> int | None:
-    m = re.search(r"\d{1,3}", str(v).translate(_INDIC_DIGITS))
+    m = _RX_AGE_NUM.search(str(v).translate(_INDIC_DIGITS))
     if m and 0 <= int(m.group(0)) <= 120:
         return int(m.group(0))
     return None

@@ -4,17 +4,24 @@ Everything here is generic Indian-language structure (labels, honorifics, kinshi
 markers, clinical vocabulary, a transliteration table). No practice-data patient
 names are stored: patient names are harvested from each input at run time.
 """
+from functools import lru_cache
 import re
 import unicodedata
 
-DEVA = "\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF"
+DEVA = "\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B80-\u0DFF"
 
-# Map Bengali (+0x80), Gurmukhi (+0x100), Gujarati (+0x180) codepoints to Devanagari
+# Map Bengali (+0x80), Gurmukhi (+0x100), Gujarati (+0x180), Tamil (+0x280), Telugu (+0x300),
+# Kannada (+0x380), and Malayalam (+0x400) codepoints to Devanagari
 # for unified transliteration and cross-script identity skeletons.
 _SCRIPT_SPECIAL = {
     "\u09CE": "त्", "\u09DC": "ड़", "\u09DD": "ढ़", "\u09DF": "य",
     "\u0A59": "ख़", "\u0A5A": "ग़", "\u0A5B": "ज़", "\u0A5C": "ड़", "\u0A5E": "फ़",
     "\u0A70": "ं", "\u0A71": "", "\u0A72": "इ", "\u0A73": "उ", "\u0A74": "ओ",
+    "\u0BFA": "", "\u0B83": "ः", "\u0BB3": "ल", "\u0BB4": "ल", "\u0BB1": "र",
+    "\u0C31": "र", "\u0C33": "ल", "\u0CB1": "र", "\u0CB3": "ल", "\u0CDE": "फ",
+    "\u0D29": "न", "\u0D31": "र", "\u0D33": "ल", "\u0D34": "ल", "\u0D3A": "ट",
+    "\u0D7A": "ण", "\u0D7B": "न", "\u0D7C": "र", "\u0D7D": "ल", "\u0D7E": "ल", "\u0D7F": "क",
+    "\u0D4E": "र्",
 }
 
 
@@ -31,6 +38,14 @@ def _to_deva(s: str) -> str:
             out.append(chr(o - 0x0100))
         elif 0x0A80 <= o <= 0x0AFF:
             out.append(chr(o - 0x0180))
+        elif 0x0B80 <= o <= 0x0BFF:
+            out.append(chr(o - 0x0280))
+        elif 0x0C00 <= o <= 0x0C7F:
+            out.append(chr(o - 0x0300))
+        elif 0x0C80 <= o <= 0x0CFF:
+            out.append(chr(o - 0x0380))
+        elif 0x0D00 <= o <= 0x0D7F:
+            out.append(chr(o - 0x0400))
         else:
             out.append(ch)
     return "".join(out)
@@ -87,12 +102,20 @@ _ALIASES = {"mohd": "mohammad", "md": "mohammad", "mohammed": "mohammad", "muham
             "mohamad": "mohammad", "mohammad": "mohammad", "mhd": "mohammad"}
 
 
+_RX_NON_AZ = re.compile(r"[^a-z]")
+_RX_AEIOUHY = re.compile(r"[aeiouhy]")
+_RX_DUP_CHAR = re.compile(r"(.)\1+")
+_RX_KEY_CAMEL = re.compile(r"([a-z])([A-Z])")
+_RX_KEY_SPLIT = re.compile(rf"[^0-9A-Za-z{DEVA}]+")
+
+
+@lru_cache(maxsize=16384)
 def skel(token: str) -> str:
     """Script- and spelling-tolerant key for one name token (Latin or Indic)."""
     t = token.strip(".").lower()
-    if any("\u0900" <= c <= "\u0AFF" for c in t):
+    if any("\u0900" <= c <= "\u0DFF" for c in t):
         t = deva_to_latin(t)
-    t = re.sub(r"[^a-z]", "", t)
+    t = _RX_NON_AZ.sub("", t)
     t = _ALIASES.get(t, t)
     if not t:
         return ""
@@ -100,9 +123,8 @@ def skel(token: str) -> str:
                  ("gh", "g"), ("sh", "s"), ("ch", "c"), ("jh", "j"), ("w", "v"), ("z", "j"),
                  ("q", "k"), ("x", "ks"), ("ee", "i"), ("oo", "u")):
         t = t.replace(a, b)
-    head, rest = t[0], re.sub(r"[aeiouhy]", "", t[1:])
-    k = head + rest
-    return re.sub(r"(.)\1+", r"\1", k)
+    head, rest = t[0], _RX_AEIOUHY.sub("", t[1:])
+    return _RX_DUP_CHAR.sub(r"\1", head + rest)
 
 
 # ---------------------------------------------------------------- name structure
@@ -136,7 +158,7 @@ FIELD_RULES = [
     ("PHONE", r"phone\w*|durawani|dooravani|ph|phno|mobile\w*|mobail|mob|mo|contact\w*|tel|telephone|whatsapp|cell|मोबाइल|फोन|फ़ोन|sampark|samparkam|fon|phon|telecom|भ्रमणध्वनी"),
     ("FAMILY_ID", r"ration\w*|bpl\w*|familyid|kasp\w*|chirayu\w*|ppp\w*"),
     ("INSURANCE", r"pmjay\w*|insur\w*|policy\w*|ayushman|beema|बीमा|claimid|memberid|cardno|scheme"),
-    ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|crn|crno|"
+    ("MRN", r"uhid\w*|mrn|mrno|patientid|patid|pid|regno|registration|regn?|panjikaran|पंजीकरण|पंजीयन|ipd\w*|opdno|opno|opipno|opip|opnambar|ipnambar|adm\w*(?:no|id)|admissionno|admissionid|crn|crno|"
             r"recordno|caseno|ipno|identifier|patientref|patref|refno|mr|नोंदणी"),
     ("DOB", r"dob|birth\w*|birthdate|janm|janam|huttida|huttidadinanka|jonmo|janmo|jonmotarikh|janana|jananam|जन्म|dateofbirth|dtb"),
     ("PIN", r"pin|pincode|zip|zipcode|postal\w*|postcode|पिन|पिनकोड"),
@@ -168,14 +190,16 @@ FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]
 _DOB_RX = dict(FIELD_RX)["DOB"]
 
 
-def key_tokens(key: str) -> list[str]:
-    k = re.sub(r"([a-z])([A-Z])", r"\1 \2", key)
-    return [t for t in re.split(rf"[^0-9A-Za-z{DEVA}]+", k.lower()) if t]
+@lru_cache(maxsize=16384)
+def key_tokens(key: str) -> tuple[str, ...]:
+    k = _RX_KEY_CAMEL.sub(r"\1 \2", key)
+    return tuple(t for t in _RX_KEY_SPLIT.split(k.lower()) if t)
 
 
 _DATE_TOK = re.compile(r"date|dated|dinanka|tithi|तारीख|तिथि|dt|lastupdated|updated|timestamp", re.I)
 
 
+@lru_cache(maxsize=16384)
 def classify_key(key: str) -> str | None:
     toks = key_tokens(key)
     joined = "".join(toks)
@@ -183,7 +207,7 @@ def classify_key(key: str) -> str | None:
         return "DOB"
     if _DATE_TOK.fullmatch(joined) or any(_DATE_TOK.fullmatch(t) for t in toks):
         return "DATE"
-    if toks == ["op"]:
+    if toks == ("op",):
         return "MRN"
     if any(t in ("address", "addr", "pata", "पता", "residence", "house", "vilasam", "melvilasam") for t in toks):
         return "ADDRESS"
@@ -203,7 +227,7 @@ ADDRESS_LABEL = re.compile(
     r"patta|sarnamu|rihaish|thikana|vilasam|melvilasam|पता|पत्ता|राहणार|मुक्काम|निवास|निवासी|रिहाइश|ठिकाना|വിലാസം)\s*[:：\-]+\s*"
     r"|(?:resident\s*of|residing\s*at|r/o|nivasi|niwasi|rehne\s*wala)\s*[:：\-]*\s*(?=(?-i:[A-Z0-9#\u0900-\u097F])))")
 VILLAGE_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:vill(?:age)?\.?|gaon|gam|gram|ग्राम|गाँव|गांव|पिंड|मोहल्ला|mohalla)\s*[:：\-.]?\s*")
-DOB_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)|janm\s*(?:tithi|tarikh))\s*[:：\-]+\s*")
+DOB_LABEL = re.compile(r"(?i)(?:^|(?<=[\s,;|(\[]))(?:dob|d\.o\.b\.?|date\s*of\s*birth|birth\s*date|जन्म\s*(?:तिथि|तारीख)?|janam(?:\s*(?:tithi|tarikh|din))?|janm\s*(?:tithi|tarikh))\s*[:：\-]+\s*")
 
 # Clinical vocabulary used to protect spans (never PII on their own)
 CLINICAL_WORDS = {

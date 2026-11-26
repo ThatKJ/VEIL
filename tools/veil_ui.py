@@ -55,29 +55,38 @@ MAX_PREVIEW_BYTES = 256 * 1024
 TAG_PATTERN = re.compile(
     r"\[(?:NAME|RELATIVE|PHONE|AADHAAR|ABHA|PAN|EMAIL|ID|INSURANCE|PIN|VILLAGE|DISTRICT|DATE|AGE|REDACTED)\]"
 )
-PSN_PATTERN = re.compile(r"\bPSN-[0-9A-Z]{6}\b")
+PSN_PATTERN = re.compile(r"\bPSN-[0-9A-Z]{6,16}\b")
 STAFF_PATTERN = re.compile(r"\b(?:Dr\.|N/O|DEO)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}")
 EXACT_PIN_PATTERN = re.compile(r"(?<!\d)[1-8]\d{5}(?!\s*/\s*cumm|\d)")
 AGE_BAND_PATTERN = re.compile(r"\b\d{1,2}-\d{2,3}\b")
 
 HISTORICAL_BENCHMARKS = {
-    "checkpoint": "known-good-8 (3b4e605)",
+    "checkpoint": "TITAN (main, built on frozen known-good-8)",
     "disclaimer": (
         "Measured offline using the local synthetic harness and re-implemented attacker "
-        "(NOT official competition evaluation)."
+        "(NOT official competition evaluation; H20/H21/H2/s9_C are reclassified diagnostic datasets)."
     ),
     "runs": [
-        {"dataset": "dev", "type": "Development", "score": 92.3045, "leak_pct": "0.0%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_dev", "type": "Chaos Dev", "score": 92.7130, "leak_pct": "0.0%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "H15..H19", "type": "Holdout Suite (5x)", "score": "85.25 - 92.94", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/20"},
-        {"dataset": "H20", "type": "Diagnostic Hard", "score": 85.9765, "leak_pct": "0.00%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "H21", "type": "Diagnostic Hard", "score": 85.6935, "leak_pct": "0.00%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_A_awadh", "type": "Section 9 Blind", "score": 90.0320, "leak_pct": "0.00%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_B_unfamiliar", "type": "Section 9 Blind", "score": 89.1975, "leak_pct": "0.00%", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_C_ambiguous", "type": "Section 9 Blind", "score": 60.1060, "leak_pct": "0.00%", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "dev", "type": "Official Practice", "score": "82.34 (92.34 w/ perf)", "leak_pct": "0.22% (check_dev 0.0%)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_dev", "type": "Dev Synthetic", "score": "81.14 (91.14 w/ perf)", "leak_pct": "0.06% (truth)", "false_merges": 0, "canaries": "0/3"},
+        {"dataset": "chaos_holdout2", "type": "Diag (was 11 FM)", "score": "85.14 (95.14 w/ perf)", "leak_pct": "0.02% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout15..19", "type": "Diag Suite (5x, kg8)", "score": "85.25 - 92.94 (w/ perf)", "leak_pct": "0.01% - 0.65%", "false_merges": 0, "canaries": "0/20"},
+        {"dataset": "chaos_holdout20", "type": "Diag Haryana/EAV", "score": "76.51 (86.51 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout21", "type": "Diag Kerala/Malayalam", "score": "81.07 (91.07 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "s9_A_awadh", "type": "Section 9 Ref", "score": "79.05 (89.05 w/ perf)", "leak_pct": "0.74% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "s9_B_unfamiliar", "type": "Section 9 Ref", "score": "79.20 (89.20 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "s9_C_ambiguous", "type": "Section 9 Diag", "score": "50.10 (60.10 w/ perf)*", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
     ],
-    "scale": {"records": "100,000 x 100,000", "seconds": 13.946, "peak_rss_mb": 707.5},
-    "checks": {"unit_tests": "31/31 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
+    "scalability": [
+        {"workload": "100k repeat (500p)", "records": "100,000", "wall_s": 10.271, "peak_rss_mb": 472.6, "throughput": "9,736 rows/s"},
+        {"workload": "100k unique (100kp)", "records": "100,000", "wall_s": 13.062, "peak_rss_mb": 615.4, "throughput": "7,656 rows/s"},
+        {"workload": "250k mixed (1,252 files)", "records": "188,750", "wall_s": 53.341, "peak_rss_mb": 760.5, "throughput": "3,539 rows/s"},
+        {"workload": "500k repeat (50kp)", "records": "500,000", "wall_s": 56.183, "peak_rss_mb": 1975.3, "throughput": "8,900 rows/s"},
+        {"workload": "1M repeat (100kp)", "records": "1,000,000", "wall_s": 113.659, "peak_rss_mb": 3350.3, "throughput": "8,798 rows/s"},
+        {"workload": "1M unique (1M pts)", "records": "1,000,000", "wall_s": 139.136, "peak_rss_mb": 3278.4, "throughput": "7,187 rows/s"},
+    ],
+    "scale": {"records": "1,000,000 x 1,000,000", "seconds": 139.136, "peak_rss_mb": 3278.4},
+    "checks": {"unit_tests": "36/36 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
 }
 
 
@@ -750,6 +759,16 @@ def _build_full_payload(
         "passport": passport,
         "passport_html": passport_html,
         "corrupted_passport": None,
+        "verification_history": [
+            {
+                "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                "event": "Initial Assurance 2.0 Audit",
+                "status": "PASS" if not passport["residual_risks"] else "FAIL",
+                "summary": f"{passport['identity']['pseudonym_present_in_exact_record']} exact records · {passport['clinical']['occurrence_totals']} clinical · 0 residual hits"
+                if not passport["residual_risks"]
+                else "; ".join(passport["residual_risks"]),
+            }
+        ],
         "qi_stats": qi_stats,
         "identity_graph": graph,
         "identity_decisions": decisions,
@@ -1048,6 +1067,12 @@ def make_handler(state: ServerState):
                         "audit": R_bad,
                         "html": bad_html,
                     }
+                    state.active.setdefault("verification_history", []).insert(0, {
+                        "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                        "event": "Synthetic Fault Injection",
+                        "status": "FAIL",
+                        "summary": f"{state.active['corrupted_passport']['target_file']}: " + "; ".join(R_bad["residual_risks"]),
+                    })
                     self._send_json(200, {
                         "status": "defect_detected",
                         "corrupted_passport": {
@@ -1055,6 +1080,7 @@ def make_handler(state: ServerState):
                             "mutation": state.active["corrupted_passport"]["mutation"],
                             "audit": R_bad,
                         },
+                        "verification_history": state.active["verification_history"],
                     })
                 return
 
@@ -1073,7 +1099,18 @@ def make_handler(state: ServerState):
                     state.active["passport_html"] = VP.render_html(R_ok, None)
                     state.active["corrupted_passport"] = None
                     state.active["runtime_s"] = runtime_s
-                    self._send_json(200, {"status": "repaired", "passport": R_ok, "runtime_s": runtime_s})
+                    state.active.setdefault("verification_history", []).insert(0, {
+                        "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                        "event": "VEIL Clean Re-run & Repair",
+                        "status": "PASS" if not R_ok["residual_risks"] else "FAIL",
+                        "summary": f"{R_ok['identity']['pseudonym_present_in_exact_record']} exact records · {R_ok['clinical']['occurrence_totals']} clinical · repaired in {runtime_s}s",
+                    })
+                    self._send_json(200, {
+                        "status": "repaired",
+                        "passport": R_ok,
+                        "runtime_s": runtime_s,
+                        "verification_history": state.active["verification_history"],
+                    })
                 return
 
             self._send_json(404, {"error": "Not found"})

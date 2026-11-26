@@ -106,13 +106,17 @@
         <div class="card">
           <div class="card-head">
             <div>
-              <h2>Verified Checkpoint Benchmarks (Local Synthetic Harness)</h2>
+              <h2>Verified Benchmarks &amp; 1M-Record Scalability Matrix</h2>
               <p class="card-sub" id="hist-disclaimer"></p>
             </div>
-            <span class="badge badge-ok" id="hist-checkpoint">known-good-8</span>
+            <span class="badge badge-ok" id="hist-checkpoint">TITAN</span>
           </div>
           <div class="table-wrap">
             <table class="data-table" id="hist-table"></table>
+          </div>
+          <div class="subhead">Measured Streaming Scalability (Offline Subprocess · &lt; 4 GB / 900s Envelope)</div>
+          <div class="table-wrap">
+            <table class="data-table" id="scale-table"></table>
           </div>
         </div>
       </section>
@@ -310,7 +314,13 @@
           </div>
 
           <div id="passport-banner" class="passport-banner ok"></div>
+          <div class="subhead">Assurance 2.0 Explicit Verification States (Exact Record / Occurrence / Temporal Coverage)</div>
+          <div id="passport-checks" class="kpi-grid"></div>
           <div id="passport-pillars" class="pillar-grid"></div>
+          <div class="subhead">Verification &amp; Fault-Repair History</div>
+          <div class="table-wrap">
+            <table class="data-table" id="passport-history-table"></table>
+          </div>
         </div>
       </section>
     </main>

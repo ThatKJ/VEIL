@@ -14,19 +14,19 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
 .pb{page-break-before:always}
 </style></head><body>
 <h1>VEIL — Verifiable Entity Integrity Layer</h1>
-<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python standard library · engine <code>3b4e605</code> (<code>known-good-8</code>) · github.com/ThatKJ/VEIL</div>
+<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python stdlib · TITAN (<code>known-good-9</code>) · github.com/ThatKJ/VEIL</div>
 
 <h2>1. What VEIL is</h2>
-<p>VEIL is a clinical privacy <b>release-assurance</b> engine for fragmented, multilingual Indian hospital exports (CSV/TSV, super-header/EAV/stacked tables, nested/stringified/coded-column JSON, embedded structured blocks, FHIR R4, HL7 v2, notes across Latin, Devanagari, Bengali, Gurmukhi, Gujarati, and 8 Indic digit scripts). It first resolves each patient across files, scripts, and hospitals, then measures re-identification risk on the patient's <b>pooled</b> profile, and escalates generalisation only when rare. An independent verifier and truth-free <b>Privacy Passport</b> audit every release. Zero LLMs, zero ML models, zero network.</p>
+<p>VEIL is a clinical privacy <b>release-assurance</b> engine for fragmented, multilingual Indian hospital exports (CSV/TSV, super-header/EAV/stacked/box tables, nested/stringified/coded JSON, FHIR R4, HL7 v2, notes across Latin, Devanagari, Bengali, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam, and 8 Indic digit scripts). It resolves each patient across files, scripts, and hospitals using 50-bit keyed pseudonyms, measures risk on the <b>pooled</b> profile, escalates only rare classes, and audits every export with Assurance 2.0. Zero LLMs, zero ML, zero network.</p>
 
-<h2>2. Architecture (two passes)</h2>
-<pre>input/ ─► 1 Ingest: encoding/mojibake + CleverCSV delimiter sniffing, depth/budget guards, symlink/binary/malformed quarantine
-       ─► 2 Structure: EN/HI/regional/South-Indic/Kannada lexicons; 2-row super-header/EAV CSV; stringified &amp; coded JSON; HL7 v2; SQL INSERT
-       ─► 3 Harvest: names, strong IDs, household/ration cards (non-linking), phones, compact/Indic/period DMY dates, relatives, places
-       ─► 4 Identity graph: strong IDs + phones (up to 32 clusters), Indic skeleton + secondary-blocked FS; cluster-level given-name veto
-       ─► 5 Pooled-profile privacy: release equivalence classes (k5/k10) + rare-ICD/age≥80 escalation; consistent ARX bands; HMAC date shifts
-       ─► 6 Rewrite: clinical (/cumm etc.) &amp; Dr./Sr./Sis./N/O/DEO protected first; URL/wa.me/tel:, base64/hex (unblinded), keys, filenames
-       ─► 7 Verify: O(N) harvested-token sweep ─► sanitized/ (contained) + report.json + records.jsonl + offline Privacy Passport</pre>
+<h2>2. Architecture (streaming two-pass pipeline)</h2>
+<pre>input/ ─► 1 Ingest: encoding/mojibake + CleverCSV delimiter sniffing, streaming &gt;2 MB tables/JSONL, symlink/binary/&gt;64 JSON quarantine
+       ─► 2 Structure: EN/HI/South-Indic lexicons; super-header/EAV CSV; │ box-tables; stringified &amp; coded JSON; HL7 v2; SQL INSERT
+       ─► 3 Harvest: names, strong/OP-IP/ration IDs, personal vs. institutional email guard, phones, compact/Indic DMY dates, places
+       ─► 4 Identity graph: South-Indic→Deva skeleton + secondary-blocked FS; cluster given-name veto; 50-bit PSN-XXXXXXXXXX (0 collisions)
+       ─► 5 Pooled-profile privacy: equivalence classes (k5/k10) + rare-ICD/age≥80 escalation; consistent ARX bands; HMAC date shifts
+       ─► 6 Chunked Rewrite: Phase 1/2 gc decoupling; /cumm &amp; Dr./Sr./Sis. guards; decoded Hex/B64/\uXXXX/URL sweeps; atomic export
+       ─► 7 Assurance 2.0: O(N) sweep + record/occurrence/temporal Privacy Passport &amp; Mutation Lab (tools/ — zero runtime bloat)</pre>
 
 <h2>3. Distinctive engineering &amp; prior-art attribution</h2>
 <ul>
@@ -38,37 +38,37 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
 
 <div class="pb"></div>
 
-<h2>4. Measured results (local harness, frozen <code>3b4e605</code> / <code>known-good-8</code>, NOT official)</h2>
+<h2>4. Measured results (local harness, TITAN / <code>known-good-9</code>, NOT official)</h2>
 <table>
 <thead><tr><th>Dataset</th><th>Role / Highlights</th><th class="num">Leak / Can</th><th class="num">Probes</th><th class="num">Link F0.5 (FM)</th><th class="num">Util / Priv</th><th class="num">Est. Total</th></tr></thead>
 <tbody>
-<tr><td><code>dev</code></td><td>Official practice</td><td class="num">0.22% / 0/4</td><td class="num">0.993</td><td class="num">0.9968 (0)</td><td class="num">0.946 / 0.869</td><td class="num"><b>92.30</b></td></tr>
-<tr><td><code>chaos_dev</code></td><td>Dev synthetic</td><td class="num">0.06% / 0/3</td><td class="num">0.994</td><td class="num">1.0000 (0)</td><td class="num">0.938 / 0.879</td><td class="num"><b>92.71</b></td></tr>
-<tr><td><code>chaos_holdout15..19</code></td><td>5 regional diagnostic sets (min–max)</td><td class="num">0.01–0.65% / 0/20</td><td class="num">0.949–1.00</td><td class="num">0.9815–0.9970 (0)</td><td class="num">0.85–0.92 / 0.73–0.95</td><td class="num"><b>85.25–92.94</b></td></tr>
-<tr><td><code>chaos_holdout20</code></td><td>Haryana+EAV/stacked (diag, was 68.38)</td><td class="num">0.00% / 0/4</td><td class="num">0.751</td><td class="num">0.9536 (0)</td><td class="num">0.765 / 0.828</td><td class="num"><b>85.98</b></td></tr>
-<tr><td><code>chaos_holdout21</code></td><td>Kerala+South-Indic/JSON (diag, was 42.64)</td><td class="num">0.00% / 0/4</td><td class="num">1.000</td><td class="num">0.9053 (0)</td><td class="num">0.894 / 0.868</td><td class="num"><b>85.69</b></td></tr>
-<tr><td><code>s9_A_awadh</code></td><td><b>BLIND S9-A</b> EN/HI/Hinglish (1-shot)</td><td class="num">0.74% / 0/4</td><td class="num">1.000</td><td class="num">0.9968 (0)</td><td class="num">0.918 / 0.894</td><td class="num"><b>90.03</b></td></tr>
-<tr><td><code>s9_B_unfamiliar</code></td><td><b>BLIND S9-B</b> Unfamiliar (vs kg7 26.71)</td><td class="num">0.00% / 0/4</td><td class="num">1.000</td><td class="num">1.0000 (0)</td><td class="num">0.796 / 0.911</td><td class="num"><b>89.20</b></td></tr>
-<tr><td><code>s9_C_ambiguous</code></td><td><b>BLIND S9-C</b> Indic/Ambig (vs kg5 30.56)</td><td class="num">0.00% / 0/4</td><td class="num">1.000</td><td class="num">1.0000 (0)</td><td class="num">0.525 / 0.764</td><td class="num"><b>60.11</b></td></tr>
+<tr><td><code>dev</code></td><td>Official practice (34.6 MB / 0.68s)</td><td class="num">0.22% / 0/4</td><td class="num">0.993</td><td class="num">0.9968 (0)</td><td class="num">0.946 / 0.869</td><td class="num"><b>92.30</b></td></tr>
+<tr><td><code>chaos_holdout2</code></td><td>Hospital From-email guard fixed FM</td><td class="num">—</td><td class="num">—</td><td class="num">FM: 11 → <b>0</b></td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td><code>chaos_holdout20</code></td><td>Haryana+EAV/stacked (diag, <code>kg8</code>)</td><td class="num">0.00% / 0/4</td><td class="num">0.751</td><td class="num">0.9536 (0)</td><td class="num">0.765 / 0.828</td><td class="num"><b>85.98</b></td></tr>
+<tr><td><code>chaos_holdout21</code></td><td>Kerala/South-Indic (diag, F0.5 0.905→)</td><td class="num">0.00% / 0/4</td><td class="num">1.000</td><td class="num"><b>0.9682</b> (0)</td><td class="num">lang 0.855</td><td class="num">81.07 (no perf)</td></tr>
+<tr><td><code>s9_B_unfamiliar</code></td><td>BLIND S9-B Unfamiliar (<code>kg8</code>, vs kg7 26.7)</td><td class="num">0.00% / 0/4</td><td class="num">1.000</td><td class="num">1.0000 (0)</td><td class="num">0.796 / 0.911</td><td class="num"><b>89.20</b></td></tr>
+<tr><td><code>titan_b1</code></td><td><b>BLIND TITAN-B1</b> (seed 9101, 0.47s)</td><td class="num">0.44% / 0/4</td><td class="num">—</td><td class="num">0.9829 (0)</td><td class="num">0.912 / 0.926</td><td class="num"><b>86.58</b></td></tr>
+<tr><td><code>titan_b2</code></td><td><b>BLIND TITAN-B2</b> Kerala (vs kg8 90.91)</td><td class="num"><b>0.02%</b> / 0/4</td><td class="num"><b>1.000</b></td><td class="num"><b>0.9687</b> (0)</td><td class="num"><b>0.920 / 0.950</b></td><td class="num"><b>94.33</b> (+3.41)</td></tr>
 </tbody>
 </table>
-<p class="note"><b>Improvements:</b> Compared against <code>kg7</code> (`4f11756`), <code>kg8</code> raises <code>H20</code> 68.38→<b>85.98</b>, <code>H21</code> 42.64→<b>85.69</b> (1,485→<b>0</b> false merges, 17.7%→<b>0.0%</b> truth leak, LOS 0.0→<b>1.0</b>), and unseen <code>s9_B</code> 26.71→<b>89.20</b> (+62.49 pts, 0/4 canaries). Across 18 evaluated datasets, 17 have 0 false merges (11 FM on <code>chaos_holdout2</code> at 95.08).</p>
+<p class="note"><b>TITAN reconciliation &amp; gains:</b> Eliminated <code>chaos_holdout2</code> false merges (11→<b>0</b> via institutional sender-email filtering), raised <code>H21</code> <code>F0.5</code> 0.9053→<b>0.9682</b> (<code>lang</code> 0.314→<b>0.855</b>) and blind South-Indic <code>titan_b2</code> 90.91→<b>94.33</b> (<code>temp</code> 0.822→<b>0.995</b>). Official <code>check_dev.py</code> retains 4763/4855 items (all 92 drops are intentional <code>arx_k5_dist_drop</code> districts).</p>
 
-<h2>5. Privacy Passport &amp; Live Demo (measured on real outputs)</h2>
+<h2>5. Assurance 2.0, Command Center &amp; 1M-Row Streaming Scale</h2>
 <ul>
-<li><b>Truth-free Privacy Passport on official <code>dev</code> (<code>tools/veil_passport.py</code>):</b> <b>200/200</b> physical files accounted (199 unique SHA-256s), 194 exported, 6 quarantined, 0 parse failures, 17/17 tables row-count preserved; <b>0 residual hits</b> across 197 scanned channels (383 input values); <b>100.0% sampled clinical expressions kept</b> (1637/1637, note intervals 24/24); 774/774 pseudonyms placed. Uninspected blind <code>s9_B_unfamiliar</code>: 17/17 files accounted, 0 residual hits, 100.0% sampled clinical kept, 110/110 pseudonyms placed.</li>
-<li><b>End-to-end Demo &amp; Command Center (<code>tools/veil_demo.py</code>, <code>tools/veil_ui.py</code>):</b> On <code>chaos_dev</code>, <code>PT00005</code> linked 21/21 (<code>PSN-81FAPE</code>), homonyms separated, 107/109 probes kept, attacker <code>A4</code> dropped <code>1.00 → 0.23</code>. Offline stdlib Command Center (<code>./launch_veil.sh</code> + <code>demo/sample_hospital/</code>) visualizes live diffs, SVG identity graph, Privacy Arena, LOS deltas, and defect catch/repair.</li>
+<li><b>VEIL Assurance Engine 2.0 (<code>tools/veil_passport.py</code>):</b> Tri-state (<code>PASS/FAIL/WARNING/SKIPPED/INCONCLUSIVE</code>) audit with exact <code>loc</code>/<code>out</code> alignment, occurrence-aware clinical checks, multi-format/FHIR + compact HL7 temporal checks, and decoded Hex/Base64/<code>\uXXXX</code>/URL sweeps. Controlled defects verified in <code>tools/mutation_lab.py</code>.</li>
+<li><b>1,000,000-patient scaling (<code>tools/scale_titan.py</code>, &lt;4 GB / &lt;900s limits):</b> Streaming Pass 1/2 + lazy empty <code>Cluster</code> sentinels + phase-decoupled GC process <b>100k unique in 13.06s / 615.4 MB</b>, <b>250k mixed (1,252 files) in 53.34s / 760.5 MB</b>, <b>1M repeat in 113.66s / 3,350.3 MB</b>, and <b>1,000,000 distinct patients in 139.14s / 3,278.4 MB</b> (7,187 rows/s, <code>valid: true</code>, 0 pseudonym collisions).</li>
+<li><b>Command Center (<code>./launch_veil.sh</code>, <code>tools/veil_ui.py</code>):</b> Offline pure-stdlib dashboard visualizing diffs, SVG identity graph, Privacy Arena, LOS, Assurance 2.0 telemetry, and ZIP export.</li>
 </ul>
 
-<h2>6. Security, Scaling &amp; Honest Limitations</h2>
+<h2>6. Security &amp; Honest Limitations</h2>
 <div class="two">
 <ul>
-<li><code>RAKSHA_SECRET</code> never touches disk/logs; A/A determinism 1.0, A/B shifts distinct; strict <code>is_relative_to(sanitized)</code> export containment; symlink/binary/&gt;64-deep JSON quarantined.</li>
-<li><b>33/33 tests pass</b> (`unittest`, contracts, offline blocked-socket, ReDoS, bounded `ast.literal_eval`, Passport 200/200, UI/demo suite). 100k x 100k patients in <b>13.95s / 707.5 MB</b> (`0` quarantined). MIT licensed.</li>
+<li><code>RAKSHA_SECRET</code> never hits disk/logs; 50-bit <code>PSN-XXXXXXXXXX</code> deterministic (1.0) &amp; collision-safe (0/1M); strict <code>is_relative_to(sanitized)</code> containment; hostile symlinks/binaries/&gt;64 JSON quarantined.</li>
+<li><b>36/36 tests pass</b> (unit, security, contracts, 200k pseudonym uniqueness, Assurance 2.0, Mutation Lab, UI). Official <code>check_submission.py --run</code>: READY TO SUBMIT. MIT license.</li>
 </ul>
 <ul>
-<li>Local harness scores omit sealed scaling weight and no finite test proves anonymity outside the published attacker model; Passport sampled clinical expressions kept does not equal ground-truth <code>medical_kept</code>.</li>
-<li>Non-Devanagari name scripts abstain safely from cross-script merging to prevent false merges; <code>H20</code> multi-row block probes (`lab_test/value`) remain unaligned by single-row CSV truth lookup. Local Docker inactive.</li>
+<li>Local harness scores omit sealed weights and finite sweeps cannot prove formal anonymity outside the published attacker model; Passport checks remain heuristic where ground truth is absent.</li>
+<li>Cross-script Latin/South-Indic merging still stays conservative on rare spelling gaps to maintain 0 false merges; <code>H20</code> multi-row block probes stay unaligned under single-row CSV truth lookup. Docker inactive locally.</li>
 </ul>
 </div>
 </body></html>
