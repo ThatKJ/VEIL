@@ -101,6 +101,45 @@ class PassportTests(unittest.TestCase):
             self.assertEqual(bad_t["checks"]["temporal"]["status"], "FAIL")
             self.assertEqual(bad_t["verdict"], "FAIL")
 
+    def test_omega_honest_verdict_parse_fail_and_jsonl_harvest(self):
+        """Assurance 3.0 handles 0-clinical N/A, JSONL harvest, malformed output fail & path traversal."""
+        with tempfile.TemporaryDirectory() as d:
+            inp, out = Path(d) / "in", Path(d) / "out"
+            inp.mkdir()
+            (inp / "roster.jsonl").write_text(
+                json.dumps({"patient_name": "Deepak Kulkarni", "uhid": "DK-991", "mobile": "9820012345"}) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [sys.executable, str(ROOT / "main.py"), "--input", str(inp), "--output", str(out)],
+                check=True,
+                capture_output=True,
+                env={**os.environ, "RAKSHA_SECRET": "omega-pp-test"},
+            )
+            clean = V.audit(inp, out)
+            self.assertIsNone(clean["clinical"]["protected_values_kept_pct"])
+            self.assertGreaterEqual(clean["privacy"]["independent_identity_values_from_input"], 1)
+            self.assertNotIn(clean["verdict"], ("FAIL",))
+
+            # Corrupt output JSONL -> outputs_parse_fail >= 1 and verdict == FAIL
+            out_jsonl = next((out / "sanitized").glob("roster*.jsonl"))
+            saved = out_jsonl.read_text(encoding="utf-8")
+            out_jsonl.write_text("{broken json\n", encoding="utf-8")
+            bad = V.audit(inp, out)
+            self.assertGreaterEqual(bad["structural"]["outputs_parse_fail"], 1)
+            self.assertEqual(bad["checks"]["structural"]["status"], "FAIL")
+            self.assertEqual(bad["verdict"], "FAIL")
+
+            # Restore clean JSONL and verify records.jsonl path traversal triggers structural failure
+            out_jsonl.write_text(saved, encoding="utf-8")
+            rj = out / "records.jsonl"
+            rj_orig = rj.read_text(encoding="utf-8")
+            rj_obj = json.loads(rj_orig.splitlines()[0])
+            rj_obj["file"] = "../../outside.jsonl"
+            rj.write_text(json.dumps(rj_obj) + "\n", encoding="utf-8")
+            trav = V.audit(inp, out)
+            self.assertEqual(trav["verdict"], "FAIL")
+
 
 if __name__ == "__main__":
     unittest.main()

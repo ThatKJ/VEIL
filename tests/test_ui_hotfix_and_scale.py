@@ -509,8 +509,10 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                 self.assertEqual(st1["status"], "ready")
                 j1_id = s1["job_id"]
                 with state.lock:
-                    j1_inp_mem = dict(state.active_upload_bytes or {})
+                    j1_inp = state.active_inp
                     j1_out = state.active_out
+                    self.assertIsNotNone(j1_inp)
+                    self.assertIsNone(state.active_upload_bytes)
 
                 # Start slow delayed Passport audit on Job 1 vs immediate Job 2 upload
                 real_audit = VP.audit
@@ -523,7 +525,7 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                     return real_audit(*a, **kw)
 
                 t_stale = threading.Thread(
-                    target=lambda: UI._ensure_passport_audited(state, None, j1_inp_mem, j1_out, force=True, job_id=j1_id),
+                    target=lambda: UI._ensure_passport_audited(state, j1_inp, None, j1_out, force=True, job_id=j1_id),
                     daemon=True,
                 )
                 VP.audit = slow_audit
@@ -547,6 +549,197 @@ class UiHotfixAndScaleTests(unittest.TestCase):
                 # Job 2 stays pending (was NOT overwritten by Job 1's stale 'verified' result!)
                 self.assertEqual(cur_state["passport_status"], "pending")
                 self.assertEqual(cur_state["report"]["counts"]["records_processed"], 20)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+
+    def test_omega_ui_security_multipart_concurrency_and_repair(self):
+        """Covers same-origin CSRF, bad query 400, RFC2046 multipart with relpaths-last & boundary-in-body, corrupt/repair on JSON-only upload, and ZIP streaming."""
+        with tempfile.TemporaryDirectory(prefix="veil_omega_ui_") as td:
+            srv, state = UI.create_server("127.0.0.1", 0, preload_demo=False, workdir=Path(td))
+            port = srv.server_address[1]
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            base = f"http://127.0.0.1:{port}"
+            try:
+                # 1. Cross-origin & null-origin POST blocked with 403
+                for bad_origin in ("http://evil.example", "null"):
+                    req = urllib.request.Request(
+                        base + "/api/run",
+                        data=b"{}",
+                        headers={"Content-Type": "application/json", "Origin": bad_origin},
+                        method="POST",
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as ctx:
+                        urllib.request.urlopen(req, timeout=5)
+                    self.assertEqual(ctx.exception.code, 403)
+
+                # 2. Invalid pagination query -> 400
+                with self.assertRaises(urllib.error.HTTPError) as ctx400:
+                    urllib.request.urlopen(base + "/api/decisions?page=abc", timeout=5)
+                self.assertEqual(ctx400.exception.code, 400)
+
+                # 3. Multipart with "--boundary" inside payload AND relpaths placed AFTER files!
+                boundary = "----VeilBoundaryXYZ"
+                fhir_json = json.dumps({
+                    "resourceType": "Patient",
+                    "id": "p1",
+                    "name": [{"text": "Meera Nair"}],
+                    "birthDate": "1990-02-14",
+                    "note": [{"text": f"Ref marker --{boundary} mid-body should not truncate"}],
+                }).encode("utf-8")
+                parts = [
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"mode\"\r\n\r\nupload\r\n".encode(),
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"secret\"\r\n\r\nomega-ui-key\r\n".encode(),
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"ignored.json\"\r\nContent-Type: application/json\r\n\r\n".encode()
+                    + fhir_json + b"\r\n",
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"relpaths\"\r\n\r\n[\"sub/fhir_patient.json\"]\r\n".encode(),
+                    f"--{boundary}--\r\n".encode(),
+                ]
+                raw_mp = b"".join(parts)
+                req_mp = urllib.request.Request(
+                    base + "/api/run",
+                    data=raw_mp,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Origin": base},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_mp, timeout=5) as resp:
+                    self.assertEqual(resp.status, 202)
+                    jid = json.loads(resp.read().decode("utf-8"))["job_id"]
+                st = self._poll_until_done(base, jid)
+                self.assertEqual(st["status"], "ready")
+
+                with state.lock:
+                    self.assertIsNotNone(state.active_inp)
+                    self.assertIsNone(state.active_upload_bytes)
+                    self.assertTrue((state.active_inp / "sub/fhir_patient.json").is_file())
+                    self.assertIn("--" + boundary, (state.active_inp / "sub/fhir_patient.json").read_text(encoding="utf-8"))
+
+                # 4. Corrupt & Repair on JSON-only upload (0 .txt files) + ZIP stream check
+                req_c = urllib.request.Request(base + "/api/passport/corrupt", data=b"{}", headers={"Origin": base}, method="POST")
+                with urllib.request.urlopen(req_c, timeout=10) as rc:
+                    corr = json.loads(rc.read().decode("utf-8"))
+                self.assertEqual(corr["status"], "defect_detected")
+                self.assertEqual(corr["corrupted_passport"]["audit"]["verdict"], "FAIL")
+
+                req_r = urllib.request.Request(base + "/api/passport/repair", data=b"{}", headers={"Origin": base}, method="POST")
+                with urllib.request.urlopen(req_r, timeout=15) as rr:
+                    rep_res = json.loads(rr.read().decode("utf-8"))
+                self.assertEqual(rep_res["status"], "repaired")
+                self.assertNotEqual(rep_res["passport"]["verdict"], "FAIL")
+
+                with urllib.request.urlopen(base + "/api/download/zip", timeout=10) as rz:
+                    zraw = rz.read()
+                with zipfile.ZipFile(io.BytesIO(zraw), "r") as zf:
+                    names = set(zf.namelist())
+                    self.assertIn("report.json", names)
+                    self.assertIn("records.jsonl", names)
+                    self.assertNotIn("sanitized/injected_defect.txt", names)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+
+    def test_omega_playwright_all_views_e2e(self):
+        """Drive real Chromium across all 7 UI tabs, multi-file staging append, corrupt/repair & error-free console."""
+        from playwright.sync_api import sync_playwright
+
+        with tempfile.TemporaryDirectory(prefix="veil_omega_pw_") as td:
+            srv, _ = UI.create_server("127.0.0.1", 0, preload_demo=False, workdir=Path(td))
+            port = srv.server_address[1]
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            base = f"http://127.0.0.1:{port}/"
+            try:
+                f1 = Path(td) / "ward_a.csv"
+                f2 = Path(td) / "ward_note.txt"
+                f1.write_text("uhid,patient_name,age,mobile\nUH-501,Ramesh Iyer,45,9876543210\n", encoding="utf-8")
+                f2.write_text(
+                    "Patient Name: Ramesh Iyer\nUHID: UH-501\nAdmitted 02/03/2026, discharged 08/03/2026.\n"
+                    "BP 130/80 mmHg. Tab. Metformin 500 mg BD.\n",
+                    encoding="utf-8",
+                )
+
+                with sync_playwright() as pw:
+                    try:
+                        browser = pw.chromium.launch(headless=True)
+                    except Exception as exc:
+                        self.skipTest(f"Chromium unavailable: {exc}")
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    errors = []
+                    page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+                    page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
+
+                    page.goto(base, wait_until="networkidle")
+                    # Before run, download button is disabled
+                    self.assertEqual(page.get_attribute("#btn-download-zip", "aria-disabled"), "true")
+
+                    # Switch to Upload & Run and stage TWO sequential files without overwriting the first
+                    page.click('button[data-view="runner"]')
+                    page.set_input_files("#file-input", str(f1))
+                    page.set_input_files("#file-input", str(f2))
+                    staged_text = page.text_content("#staged-files-list") or ""
+                    self.assertIn("ward_a.csv", staged_text)
+                    self.assertIn("ward_note.txt", staged_text)
+
+                    page.click("#btn-run-uploaded")
+                    page.wait_for_function(
+                        "() => document.querySelector('#status-pill')?.textContent.includes('Sanitized Ready')",
+                        timeout=30000,
+                    )
+                    self.assertEqual(page.get_attribute("#btn-download-zip", "aria-disabled"), "false")
+
+                    # Visit every remaining tab & exercise on-demand controls
+                    page.click('button[data-view="inspector"]')
+                    page.wait_for_function(
+                        "() => (document.querySelector('#diff-output-pre')?.textContent || '').includes('PSN-')",
+                        timeout=10000,
+                    )
+
+                    page.click('button[data-view="graph"]')
+                    page.click("#btn-run-identity")
+                    page.wait_for_function(
+                        "() => (document.querySelector('#graph-subset-badge')?.textContent || '').includes('clusters')",
+                        timeout=15000,
+                    )
+
+                    page.click('button[data-view="arena"]')
+                    page.click("#btn-run-arena")
+                    page.wait_for_function(
+                        "() => (document.querySelector('#arena-status-badge')?.textContent || '') === 'Measured Live'",
+                        timeout=30000,
+                    )
+
+                    page.click('button[data-view="clinical"]')
+                    clin_txt = page.text_content("#view-clinical") or ""
+                    self.assertIn("500 mg", clin_txt)
+
+                    page.click('button[data-view="passport"]')
+                    page.click("#btn-run-passport")
+                    page.wait_for_function(
+                        "() => (document.querySelector('#passport-banner')?.textContent || '').includes('RELEASE AUDIT PASSED')",
+                        timeout=15000,
+                    )
+
+                    # Inject defect -> export link gets ?variant=corrupt, repair clears it
+                    page.click("#btn-corrupt-demo")
+                    page.wait_for_function(
+                        "() => (document.querySelector('#passport-banner')?.textContent || '').includes('SYNTHETIC DEFECT CAUGHT')",
+                        timeout=10000,
+                    )
+                    self.assertIn("?variant=corrupt", page.get_attribute("#btn-export-passport-html", "href") or "")
+
+                    page.click("#btn-repair-demo")
+                    page.wait_for_function(
+                        "() => (document.querySelector('#passport-banner')?.textContent || '').includes('RELEASE AUDIT PASSED')",
+                        timeout=20000,
+                    )
+                    self.assertNotIn("?variant=corrupt", page.get_attribute("#btn-export-passport-html", "href") or "")
+
+                    body_txt = page.inner_text("body")
+                    self.assertNotIn("NaN", body_txt)
+                    self.assertNotIn("undefined", body_txt)
+                    self.assertEqual(errors, [])
+                    browser.close()
             finally:
                 srv.shutdown()
                 srv.server_close()

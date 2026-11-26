@@ -34,6 +34,7 @@ def run_engine(inp: Path, out: Path, policy: dict | None = None, secret: str = "
         env["RAKSHAK_EXPERIMENT"] = "1"
         env.update({f"RAKSHAK_P_{k.upper()}": v for k, v in policy.items()})
     if out.exists():
+        shutil.rmtree(str(out) + ".old", ignore_errors=True)
         shutil.move(str(out), str(out) + ".old")
     subprocess.run([sys.executable, str(ROOT / "main.py"), "--input", str(inp), "--output", str(out)],
                    check=True, capture_output=True, env=env)
@@ -142,6 +143,7 @@ def main() -> int:
     # ---- 5. defect injection -> Passport -> repair
     bad = OUT / "release_with_injected_defect"
     if bad.exists():
+        shutil.rmtree(str(bad) + ".old", ignore_errors=True)
         shutil.move(str(bad), str(bad) + ".old")
     shutil.copytree(o, bad)
     target = next(p for p in sorted((bad / "sanitized").rglob("*.txt")) if re.search(r"\d+\s*mg", p.read_text(encoding="utf-8")))

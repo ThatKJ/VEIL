@@ -68,11 +68,13 @@ TAG_PATTERN = re.compile(
     r"\[(?:NAME|RELATIVE|PHONE|AADHAAR|ABHA|PAN|EMAIL|ID|INSURANCE|PIN|VILLAGE|DISTRICT|DATE|AGE|REDACTED)\]"
 )
 PSN_PATTERN = re.compile(r"\bPSN-[0-9A-Z]{6,16}\b")
-STAFF_PATTERN = re.compile(r"\b(?:Dr\.|N/O|DEO)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}")
+STAFF_PATTERN = re.compile(r"\b(?:Dr\.|Sr\.|Sis\.|N/O|DEO)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}")
 EXACT_PIN_PATTERN = re.compile(r"(?<!\d)[1-8]\d{5}(?!\s*/\s*cumm|\d)")
 AGE_BAND_PATTERN = re.compile(r"\b\d{1,2}-\d{2,3}\b")
 
 JOB_STATES = ("uploading", "queued", "running", "validating", "ready", "failed", "cancelled")
+_POLICY_LOAD_LOCK = threading.Lock()
+MAX_RETAINED_JOBS = 48
 
 HISTORICAL_BENCHMARKS = {
     "team": "The Aevos",
@@ -121,6 +123,8 @@ class ServerState:
         self.lock = threading.Lock()
         self.jobs: dict[str, dict] = {}
         self.job_procs: dict[str, subprocess.Popen] = {}
+        self.job_seq: int = 0
+        self.latest_job_id: str | None = None
         self.active: dict | None = None
         self.active_job_id: str | None = None
         self.active_inp: Path | None = None
@@ -346,25 +350,26 @@ def _detect_scripts_from_sample(text: str) -> list[str]:
 def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[dict, list[dict], dict]:
     """Build bounded PII-safe patient identity graph, bounded non-quadratic decisions, and exact QI stats."""
     pol_path = ROOT / "config" / "policy.yaml"
-    old_exp = os.environ.get("RAKSHAK_EXPERIMENT")
-    old_mode = os.environ.get("RAKSHAK_P_QI_MODE")
-    try:
-        if policy_mode in ("mask", "fixed"):
-            os.environ["RAKSHAK_EXPERIMENT"] = "1"
-            os.environ["RAKSHAK_P_QI_MODE"] = policy_mode
-        else:
-            os.environ.pop("RAKSHAK_EXPERIMENT", None)
-            os.environ.pop("RAKSHAK_P_QI_MODE", None)
-        policy = PL.load_policy(pol_path)
-    finally:
-        if old_exp is None:
-            os.environ.pop("RAKSHAK_EXPERIMENT", None)
-        else:
-            os.environ["RAKSHAK_EXPERIMENT"] = old_exp
-        if old_mode is None:
-            os.environ.pop("RAKSHAK_P_QI_MODE", None)
-        else:
-            os.environ["RAKSHAK_P_QI_MODE"] = old_mode
+    with _POLICY_LOAD_LOCK:
+        old_exp = os.environ.get("RAKSHAK_EXPERIMENT")
+        old_mode = os.environ.get("RAKSHAK_P_QI_MODE")
+        try:
+            if policy_mode in ("mask", "fixed"):
+                os.environ["RAKSHAK_EXPERIMENT"] = "1"
+                os.environ["RAKSHAK_P_QI_MODE"] = policy_mode
+            else:
+                os.environ.pop("RAKSHAK_EXPERIMENT", None)
+                os.environ.pop("RAKSHAK_P_QI_MODE", None)
+            policy = PL.load_policy(pol_path)
+        finally:
+            if old_exp is None:
+                os.environ.pop("RAKSHAK_EXPERIMENT", None)
+            else:
+                os.environ["RAKSHAK_EXPERIMENT"] = old_exp
+            if old_mode is None:
+                os.environ.pop("RAKSHAK_P_QI_MODE", None)
+            else:
+                os.environ["RAKSHAK_P_QI_MODE"] = old_mode
 
     H = PL.Harvest()
     jobs = []
@@ -384,8 +389,10 @@ def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[di
             raw_scripts_by_file[j.rel] = _detect_scripts_from_sample(sample_t)
 
     rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    sha_to_out = {e["input_sha256"]: e.get("output") for e in rep.get("files", [])}
-    out_rel_by_in = {j.rel: sha_to_out.get(j.sha) for j in jobs}
+    by_sha_q: dict[str, list[str | None]] = defaultdict(list)
+    for e in rep.get("files", []):
+        by_sha_q[e["input_sha256"]].append(e.get("output"))
+    out_rel_by_in = {j.rel: (by_sha_q[j.sha].pop(0) if by_sha_q.get(j.sha) else None) for j in jobs}
 
     rec_psn_map: dict[tuple[str, str], str | None] = {}
     with (out / "records.jsonl").open("r", encoding="utf-8") as rf:
@@ -560,7 +567,7 @@ def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[di
                 psn in display_psn_set
                 and anchor["node_id"] in displayed_rec_ids
                 and other["node_id"] in displayed_rec_ids
-                and len(edges_out) < MAX_GRAPH_EDGES
+                and len(edges_out) < MAX_GRAPH_EDGES - 30
             ):
                 edges_out.append({
                     "source": anchor["node_id"],
@@ -741,12 +748,18 @@ def _analyze_identity_and_qi(inp: Path, out: Path, policy_mode: str) -> tuple[di
             "truncated": len(nodes_clusters) < len(sorted_psns) or len(nodes_records) < len(recs),
         },
         "decision_counts": {
-            "matched": sum(1 for d in decisions if d["decision"] == "matched"),
+            "matched": matched_count_total,
+            "matched_sampled": sum(1 for d in decisions if d["decision"] == "matched"),
             "rejected": rejected_count,
             "ambiguous": ambiguous_pair_count + total_unlinked,
             "displayed": len(decisions),
             "candidates_checked": len(candidate_pairs),
-            "truncated": len(candidate_pairs) >= MAX_CANDIDATE_CHECKS or len(decisions) >= MAX_DECISIONS_STORED,
+            "truncated": (
+                len(candidate_pairs) >= MAX_CANDIDATE_CHECKS
+                or len(decisions) >= MAX_DECISIONS_STORED
+                or capped_buckets > 0
+                or matched_count_total > sum(1 for d in decisions if d["decision"] == "matched")
+            ),
         },
     }
     return graph, decisions, qi_stats
@@ -810,7 +823,9 @@ def _extract_fast_summary(inp: Path, out: Path, rep: dict | None = None) -> tupl
     """Extract lightweight file index + transformation tag totals + bounded clinical summary without loading full multi-MB diffs."""
     if rep is None:
         rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    by_sha = {e["input_sha256"]: e for e in rep.get("files", [])}
+    by_sha_q: dict[str, list[dict]] = defaultdict(list)
+    for e in rep.get("files", []):
+        by_sha_q[e["input_sha256"]].append(e)
     file_index = []
     timeline_checks = []
     agg_tags = Counter()
@@ -845,7 +860,7 @@ def _extract_fast_summary(inp: Path, out: Path, rep: dict | None = None) -> tupl
                     break
                 h.update(blk)
         sha = h.hexdigest()
-        entry = by_sha.get(sha, {})
+        entry = by_sha_q[sha].pop(0) if by_sha_q.get(sha) else {}
         status = entry.get("status", "unknown")
         out_rel = entry.get("output")
         reason = entry.get("reason")
@@ -871,8 +886,12 @@ def _extract_fast_summary(inp: Path, out: Path, rep: dict | None = None) -> tupl
 
         out_path = (out / out_rel) if out_rel else None
         out_size = out_path.stat().st_size if (out_path and out_path.is_file()) else 0
-        # Scan up to 1MB per file cleanly for tag/clinical stats; huge files still count cleanly via report.json
-        scan_bytes = out_path.read_bytes()[:1024 * 1024] if (out_path and out_path.is_file()) else b""
+        # Stream up to 1MB cleanly without allocating full multi-MB files in RAM
+        if out_path and out_path.is_file():
+            with out_path.open("rb") as out_fh:
+                scan_bytes = out_fh.read(1024 * 1024)
+        else:
+            scan_bytes = b""
         out_txt = scan_bytes.decode("utf-8", errors="replace")
         in_txt = VP.decode(sample_in_bytes)
 
@@ -906,7 +925,7 @@ def _extract_fast_summary(inp: Path, out: Path, rep: dict | None = None) -> tupl
                     })
 
         if len(clinical_samples) < 18:
-            out_norm = VP.norm(out_txt[:65536])
+            out_norm = VP.norm(out_txt)
             for cat, rx in clinical_extractors:
                 for m in rx.finditer(in_txt):
                     val = " ".join(m.group(0).split()).strip(".,;")
@@ -1080,11 +1099,15 @@ def _build_primary_payload(
     )
 
     emit("validating", 75, "Validating mandatory output structure")
+    if cancel_check and cancel_check():
+        raise UiApiError(409, "cancelled", "Job cancelled before completion")
     t_val0 = time.monotonic()
     rep = _validate_release_contract(inp, out)
     validate_s = round(time.monotonic() - t_val0, 3)
 
     emit("validating", 88, "Preparing release summary & download index")
+    if cancel_check and cancel_check():
+        raise UiApiError(409, "cancelled", "Job cancelled before completion")
     file_index, clinical_detail, transformations = _extract_fast_summary(inp, out, rep)
 
     passport = None
@@ -1098,12 +1121,16 @@ def _build_primary_payload(
     identity_s = None
 
     if run_optional:
+        if cancel_check and cancel_check():
+            raise UiApiError(409, "cancelled", "Job cancelled before completion")
         emit("validating", 93, "Auditing small demo Privacy Passport & identity")
         t_p0 = time.monotonic()
         passport = VP.audit(inp, out)
         passport_html = VP.render_html(passport, None)
         passport_s = round(time.monotonic() - t_p0, 3)
         passport_status = "verified"
+        if cancel_check and cancel_check():
+            raise UiApiError(409, "cancelled", "Job cancelled before completion")
         t_i0 = time.monotonic()
         graph, decisions, qi_stats = _analyze_identity_and_qi(inp, out, policy_mode)
         identity_s = round(time.monotonic() - t_i0, 3)
@@ -1112,11 +1139,12 @@ def _build_primary_payload(
     total_ui_s = round(upload_s + (time.monotonic() - t_total0), 3)
     ver_hist = []
     if passport_status == "verified" and passport is not None:
+        v_state = passport.get("verdict") or ("PASS" if not passport["residual_risks"] else "FAIL")
         ver_hist.append({
             "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
             "event": "Initial Assurance 3.0 Audit",
-            "status": "PASS" if not passport["residual_risks"] else "FAIL",
-            "summary": f"{passport['identity']['pseudonym_present_in_exact_record']} exact records · {passport['clinical']['occurrence_totals']} clinical · 0 residual hits"
+            "status": v_state,
+            "summary": f"{passport['identity']['pseudonym_present_in_exact_record']} exact records · {passport['clinical']['occurrence_totals']} clinical · {v_state}"
             if not passport["residual_risks"]
             else "; ".join(passport["residual_risks"]),
         })
@@ -1188,7 +1216,8 @@ def _stage_uploaded_files(files: list[dict], dest: Path) -> tuple[dict[str, byte
             except (binascii.Error, ValueError) as exc:
                 raise UiApiError(400, "invalid_file", "Invalid base64 upload payload") from exc
         else:
-            raw = str(item.get("text", "")).encode("utf-8")
+            raw_text = item.get("text")
+            raw = ("" if raw_text is None else str(raw_text)).encode("utf-8")
         total_bytes += len(raw)
         if total_bytes > MAX_UPLOAD_BYTES:
             shutil.rmtree(dest, ignore_errors=True)
@@ -1200,9 +1229,33 @@ def _stage_uploaded_files(files: list[dict], dest: Path) -> tuple[dict[str, byte
             raise UiApiError(400, "invalid_file", "Unsafe upload target path")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
-        mem_files[rel] = raw
         staged_meta.append({"orig": orig_rel, "path": rel, "renamed": renamed, "bytes": len(raw)})
     return mem_files, staged_meta
+
+
+def _split_multipart_sections(raw_body: bytes, boundary: bytes) -> list[bytes]:
+    """Split multipart payload strictly on RFC 2046 boundary lines (never matching mid-line data)."""
+    marker = b"--" + boundary
+    if not raw_body.startswith(marker):
+        idx = raw_body.find(b"\r\n" + marker)
+        if idx == -1:
+            return []
+        raw_body = raw_body[idx + 2 :]
+    # Split only on boundary lines preceded by start or CRLF
+    sections: list[bytes] = []
+    pos = len(marker)
+    while pos < len(raw_body):
+        if raw_body[pos : pos + 2] == b"--":
+            break
+        if raw_body[pos : pos + 2] == b"\r\n":
+            pos += 2
+        nxt = raw_body.find(b"\r\n" + marker, pos)
+        if nxt == -1:
+            sections.append(raw_body[pos:])
+            break
+        sections.append(raw_body[pos:nxt])
+        pos = nxt + 2 + len(marker)
+    return sections
 
 
 def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> tuple[dict, dict[str, bytes], list[dict]]:
@@ -1211,7 +1264,6 @@ def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> t
     if not m:
         raise UiApiError(400, "upload_error", "Missing multipart boundary header")
     boundary = (m.group(1) or m.group(2)).encode("latin-1")
-    delim = b"--" + boundary
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -1219,20 +1271,12 @@ def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> t
 
     fields: dict[str, str] = {}
     relpaths: list[str] = []
-    mem_files: dict[str, bytes] = {}
+    file_parts: list[tuple[str, bytes]] = []
     staged_meta: list[dict] = []
     used_lower: set[str] = set()
     total_bytes = 0
-    file_idx = 0
 
-    parts = raw_body.split(delim)
-    for part in parts[1:]:
-        if part.startswith(b"--"):
-            break
-        if part.startswith(b"\r\n"):
-            part = part[2:]
-        if part.endswith(b"\r\n"):
-            part = part[:-2]
+    for part in _split_multipart_sections(raw_body, boundary):
         sep = part.find(b"\r\n\r\n")
         if sep == -1:
             continue
@@ -1244,11 +1288,11 @@ def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> t
             if hline.lower().startswith("content-disposition:"):
                 disp = hline
                 break
-        nm = re.search(r'\bname="([^"]+)"', disp)
+        nm = re.search(r'\bname="((?:\\.|[^"])*)"', disp)
         if not nm:
             continue
-        field_name = nm.group(1)
-        fnm = re.search(r'\bfilename="([^"]*)"', disp)
+        field_name = nm.group(1).replace('\\"', '"')
+        fnm = re.search(r'\bfilename="((?:\\.|[^"])*)"', disp)
         if fnm is None:
             val = body.decode("utf-8", errors="replace")
             if field_name == "relpaths":
@@ -1261,20 +1305,21 @@ def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> t
             else:
                 fields[field_name] = val
             continue
-
-        if len(mem_files) >= MAX_UPLOAD_FILES:
+        if len(file_parts) >= MAX_UPLOAD_FILES:
             shutil.rmtree(dest, ignore_errors=True)
             raise UiApiError(400, "file_count_exceeded", f"Too many files: maximum is {MAX_UPLOAD_FILES}")
-        raw_fn = relpaths[file_idx] if file_idx < len(relpaths) else fnm.group(1)
-        file_idx += 1
-        orig_rel = _safe_rel(raw_fn)
-        if not orig_rel:
-            shutil.rmtree(dest, ignore_errors=True)
-            raise UiApiError(400, "invalid_file", "Invalid or unsafe uploaded filename")
         total_bytes += len(body)
         if total_bytes > MAX_UPLOAD_BYTES:
             shutil.rmtree(dest, ignore_errors=True)
             raise UiApiError(413, "size_limit_exceeded", "Uploaded dataset exceeds 16 MB limit")
+        file_parts.append((fnm.group(1).replace('\\"', '"'), body))
+
+    for file_idx, (fn_raw, body) in enumerate(file_parts):
+        raw_fn = relpaths[file_idx] if file_idx < len(relpaths) else fn_raw
+        orig_rel = _safe_rel(raw_fn)
+        if not orig_rel:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise UiApiError(400, "invalid_file", "Invalid or unsafe uploaded filename")
         rel, renamed = _dedupe_rel(orig_rel, used_lower)
         target = (dest / rel).resolve()
         if not target.is_relative_to(dest_root):
@@ -1282,13 +1327,12 @@ def _parse_multipart_upload(raw_body: bytes, content_type: str, dest: Path) -> t
             raise UiApiError(400, "invalid_file", "Unsafe upload path")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
-        mem_files[rel] = body
         staged_meta.append({"orig": orig_rel, "path": rel, "renamed": renamed, "bytes": len(body)})
 
-    if not mem_files:
+    if not staged_meta:
         shutil.rmtree(dest, ignore_errors=True)
         raise UiApiError(400, "invalid_file", "No uploaded files received")
-    return fields, mem_files, staged_meta
+    return fields, {}, staged_meta
 
 
 def _materialize_mem_files(mem_files: dict[str, bytes], dest: Path) -> None:
@@ -1300,29 +1344,64 @@ def _materialize_mem_files(mem_files: dict[str, bytes], dest: Path) -> None:
             target.write_bytes(raw)
 
 
-def _create_zip_bytes(out: Path) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+def _build_spooled_zip(out: Path) -> tuple[tempfile.SpooledTemporaryFile, int]:
+    sp = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024)
+    with zipfile.ZipFile(sp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in sorted(out.rglob("*")):
             if p.is_file():
                 rel = p.relative_to(out).as_posix()
                 if rel.startswith(("sanitized/",)) or rel in ("report.json", "records.jsonl"):
                     zf.write(p, arcname=rel)
-    return buf.getvalue()
+    size = sp.tell()
+    sp.seek(0)
+    return sp, size
+
+
+def _acquire_busy_dir(state: ServerState, run_dir: Path | None) -> str | None:
+    if run_dir is None:
+        return None
+    dname = run_dir.name
+    with state.lock:
+        state.busy_run_dirs[dname] += 1
+    return dname
+
+
+def _release_busy_dir(state: ServerState, dname: str | None) -> None:
+    if not dname:
+        return
+    need_clean = False
+    with state.lock:
+        if state.busy_run_dirs.get(dname, 0) <= 1:
+            state.busy_run_dirs.pop(dname, None)
+            if state.active_run_dir is None or state.active_run_dir.name != dname:
+                need_clean = True
+        else:
+            state.busy_run_dirs[dname] -= 1
+    if need_clean:
+        _cleanup_old_workdirs(state)
 
 
 def _cleanup_old_workdirs(state: ServerState) -> None:
-    """Keep only the active job workdir and any actively running job workdirs cleanly."""
+    """Keep only the active job workdir, busy dirs, and any actively running job workdirs cleanly."""
     with state.lock:
         keep_dirs = set()
         if state.active_run_dir is not None:
             keep_dirs.add(state.active_run_dir.name)
-        for jid, jb in state.jobs.items():
+        for jid, jb in list(state.jobs.items()):
             if jb.get("status") in ("uploading", "queued", "running", "validating"):
                 keep_dirs.add(f"job_{jid}")
         for dname, cnt in state.busy_run_dirs.items():
             if cnt > 0:
                 keep_dirs.add(dname)
+        # Bound retained terminal job metadata entries cleanly
+        if len(state.jobs) > MAX_RETAINED_JOBS:
+            done_keys = [
+                k for k, v in state.jobs.items()
+                if k != state.active_job_id and k != state.latest_job_id
+                and v.get("status") in ("ready", "failed", "cancelled")
+            ]
+            for old_k in done_keys[: len(state.jobs) - MAX_RETAINED_JOBS]:
+                state.jobs.pop(old_k, None)
     for p in state.workdir.glob("job_*"):
         if p.is_dir() and p.name not in keep_dirs:
             shutil.rmtree(p, ignore_errors=True)
@@ -1359,7 +1438,77 @@ def make_handler(state: ServerState):
                 encoded = b'{"error":"Response serialization failure","error_code":"serialization_failed"}'
             self._send(code, encoded, "application/json; charset=utf-8")
 
+        def _send_spooled(self, code: int, sp: tempfile.SpooledTemporaryFile, size: int, ctype: str, extra_headers: dict[str, str] | None = None) -> None:
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                if extra_headers:
+                    for k, v in extra_headers.items():
+                        self.send_header(k, v)
+                self.end_headers()
+                sp.seek(0)
+                while True:
+                    chunk = sp.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+            finally:
+                try:
+                    sp.close()
+                except Exception:
+                    pass
+
+        def _check_same_origin(self) -> None:
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return
+            if origin.strip().lower() == "null":
+                raise UiApiError(403, "forbidden_origin", "Cross-origin POST with null origin blocked")
+            po = urllib.parse.urlparse(origin)
+            host_hdr = (self.headers.get("Host") or "").strip()
+            if not po.netloc or (host_hdr and po.netloc.lower() != host_hdr.lower()):
+                raise UiApiError(403, "forbidden_origin", "Cross-origin POST request blocked")
+
         def _read_body_exact(self, limit: int) -> bytes:
+            te = (self.headers.get("Transfer-Encoding") or "").lower()
+            if "chunked" in te:
+                buf = bytearray()
+                while True:
+                    sz_line = self.rfile.readline(128)
+                    if not sz_line:
+                        raise UiApiError(400, "upload_error", "Malformed chunked request body")
+                    sz_tok = sz_line.split(b";", 1)[0].strip()
+                    try:
+                        chunk_len = int(sz_tok, 16)
+                    except ValueError as exc:
+                        raise UiApiError(400, "upload_error", "Malformed chunk size") from exc
+                    if chunk_len < 0:
+                        raise UiApiError(400, "upload_error", "Negative chunk size")
+                    if chunk_len == 0:
+                        # Consume trailer headers until empty line
+                        while True:
+                            tr = self.rfile.readline(4096)
+                            if not tr or tr in (b"\r\n", b"\n"):
+                                break
+                        break
+                    if len(buf) + chunk_len > limit:
+                        self.close_connection = True
+                        raise UiApiError(413, "size_limit_exceeded", "Uploaded payload exceeds size limit (16 MB)")
+                    data = self.rfile.read(chunk_len)
+                    if len(data) != chunk_len:
+                        raise UiApiError(400, "upload_error", "Truncated chunked upload")
+                    buf.extend(data)
+                    crlf = self.rfile.read(2)
+                    if crlf not in (b"\r\n", b"\n"):
+                        raise UiApiError(400, "upload_error", "Malformed chunk terminator")
+                if not buf:
+                    raise UiApiError(400, "upload_error", "Empty request body")
+                return bytes(buf)
             raw_len = self.headers.get("Content-Length", "0")
             try:
                 length = int(raw_len)
@@ -1408,10 +1557,15 @@ def make_handler(state: ServerState):
                 with state.lock:
                     active = state.active
                     aj = state.active_job_id
+                    rj = None
+                    lj = state.latest_job_id
+                    if lj and state.jobs.get(lj, {}).get("status") in ("uploading", "queued", "running", "validating"):
+                        rj = lj
                     if not active:
                         snap = {
                             "ready": False,
                             "active_job_id": aj,
+                            "running_job_id": rj,
                             "demo_available": DEMO_DIR.is_dir(),
                             "historical_benchmarks": HISTORICAL_BENCHMARKS,
                         }
@@ -1419,6 +1573,7 @@ def make_handler(state: ServerState):
                         snap = {k: v for k, v in active.items() if k != "passport_html"}
                         snap["ready"] = True
                         snap["active_job_id"] = aj
+                        snap["running_job_id"] = rj
                         snap["demo_available"] = DEMO_DIR.is_dir()
                 self._send_json(200, snap)
                 return
@@ -1439,59 +1594,75 @@ def make_handler(state: ServerState):
                 try:
                     fidx = int((qs.get("idx") or ["0"])[0])
                 except ValueError:
-                    self._send_json(400, {"error": "Invalid file index"})
+                    self._send_json(400, {"error": "Invalid file index", "error_code": "bad_request"})
                     return
+                busy_dname: str | None = None
                 with state.lock:
                     active = state.active
                     inp = state.active_inp
                     upload_mem = state.active_upload_bytes
                     out = state.active_out
-                if not active or not out:
+                    if active and out and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
+                if not active or not out or (not inp and not upload_mem):
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(404, {"error": "No active run"})
                     return
-                files = active.get("file_pairs") or []
-                if fidx < 0 or fidx >= len(files):
-                    self._send_json(404, {"error": "File index out of range"})
-                    return
-                meta = dict(files[fidx])
-                in_rel = meta["input_rel"]
-                out_rel = meta.get("output_rel")
-                in_txt = ""
-                out_txt = ""
-                if meta["status"] == "quarantined":
-                    raw_sample = b""
-                    if inp is not None and (inp / in_rel).is_file():
-                        with (inp / in_rel).open("rb") as f:
-                            raw_sample = f.read(64)
-                    elif upload_mem and in_rel in upload_mem:
-                        raw_sample = upload_mem[in_rel][:64]
-                    in_txt = f"[BINARY / UNSUPPORTED PAYLOAD QUARANTINED]\nFile: {in_rel}\nSize: {meta['bytes_in']} bytes\nMagic prefix hex: {raw_sample[:24].hex(' ')}"
-                    out_txt = f"[QUARANTINED — NOT EXPORTED TO sanitized/]\nReason: {meta.get('reason') or 'unsupported_format'}"
-                else:
-                    if inp is not None and (inp / in_rel).is_file():
-                        with (inp / in_rel).open("rb") as f:
-                            raw_chunk = f.read(MAX_PREVIEW_BYTES + 1)
-                    elif upload_mem and in_rel in upload_mem:
-                        raw_chunk = upload_mem[in_rel][: MAX_PREVIEW_BYTES + 1]
+                try:
+                    files = active.get("file_pairs") or []
+                    if fidx < 0 or fidx >= len(files):
+                        self._send_json(404, {"error": "File index out of range"})
+                        return
+                    meta = dict(files[fidx])
+                    in_rel = meta["input_rel"]
+                    out_rel = meta.get("output_rel")
+                    in_txt = ""
+                    out_txt = ""
+                    if meta["status"] == "quarantined":
+                        raw_sample = b""
+                        if inp is not None and (inp / in_rel).is_file():
+                            with (inp / in_rel).open("rb") as f:
+                                raw_sample = f.read(64)
+                        elif upload_mem and in_rel in upload_mem:
+                            raw_sample = upload_mem[in_rel][:64]
+                        in_txt = f"[BINARY / UNSUPPORTED PAYLOAD QUARANTINED]\nFile: {in_rel}\nSize: {meta['bytes_in']} bytes\nMagic prefix hex: {raw_sample[:24].hex(' ')}"
+                        out_txt = f"[QUARANTINED — NOT EXPORTED TO sanitized/]\nReason: {meta.get('reason') or 'unsupported_format'}"
                     else:
-                        raw_chunk = b""
-                    in_dec = VP.decode(raw_chunk[:MAX_PREVIEW_BYTES])
-                    in_txt = in_dec + ("\n... [preview truncated; exported file untouched]" if len(raw_chunk) > MAX_PREVIEW_BYTES else "")
-                    if out_rel and (out / out_rel).is_file():
-                        with (out / out_rel).open("rb") as f:
-                            out_chunk = f.read(MAX_PREVIEW_BYTES + 1)
-                        out_dec = out_chunk[:MAX_PREVIEW_BYTES].decode("utf-8", errors="replace")
-                        out_txt = out_dec + ("\n... [preview truncated; full file in Download ZIP]" if len(out_chunk) > MAX_PREVIEW_BYTES else "")
-                meta["input_text"] = in_txt
-                meta["output_text"] = out_txt
-                self._send_json(200, meta)
+                        if inp is not None and (inp / in_rel).is_file():
+                            with (inp / in_rel).open("rb") as f:
+                                raw_chunk = f.read(MAX_PREVIEW_BYTES + 1)
+                        elif upload_mem and in_rel in upload_mem:
+                            raw_chunk = upload_mem[in_rel][: MAX_PREVIEW_BYTES + 1]
+                        else:
+                            raw_chunk = b""
+                        in_dec = VP.decode(raw_chunk[:MAX_PREVIEW_BYTES])
+                        in_txt = in_dec + ("\n... [preview truncated; exported file untouched]" if len(raw_chunk) > MAX_PREVIEW_BYTES else "")
+                        if out_rel and (out / out_rel).is_file():
+                            with (out / out_rel).open("rb") as f:
+                                out_chunk = f.read(MAX_PREVIEW_BYTES + 1)
+                            out_dec = out_chunk[:MAX_PREVIEW_BYTES].decode("utf-8", errors="replace")
+                            out_txt = out_dec + ("\n... [preview truncated; full file in Download ZIP]" if len(out_chunk) > MAX_PREVIEW_BYTES else "")
+                    meta["input_text"] = in_txt
+                    meta["output_text"] = out_txt
+                    self._send_json(200, meta)
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             if path == "/api/decisions":
                 qs = urllib.parse.parse_qs(parsed.query)
                 filt = (qs.get("filter") or ["all"])[0]
-                page = max(0, int((qs.get("page") or ["0"])[0] or 0))
-                limit = min(100, max(1, int((qs.get("limit") or ["50"])[0] or 50)))
+                try:
+                    raw_page = (qs.get("page") or ["0"])[0]
+                    raw_lim = (qs.get("limit") or ["50"])[0]
+                    page_val = int(raw_page if raw_page != "" else "0")
+                    lim_val = int(raw_lim if raw_lim != "" else "50")
+                except ValueError:
+                    self._send_json(400, {"error": "Invalid pagination parameter", "error_code": "bad_request"})
+                    return
+                page = max(0, page_val)
+                limit = min(100, max(1, lim_val))
                 with state.lock:
                     active = state.active
                     decs = list(active.get("identity_decisions", [])) if active else []
@@ -1555,23 +1726,41 @@ def make_handler(state: ServerState):
                 return
 
             if path == "/api/download/zip":
+                busy_dname: str | None = None
                 with state.lock:
                     out = state.active_out
+                    if out and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
                 if not out or not out.is_dir():
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(404, {"error": "No sanitized release available"})
                     return
-                zbytes = _create_zip_bytes(out)
-                self._send(
-                    200,
-                    zbytes,
-                    "application/zip",
-                    {"Content-Disposition": 'attachment; filename="veil_sanitized_release.zip"'},
-                )
+                try:
+                    sp, zsize = _build_spooled_zip(out)
+                except Exception:
+                    _release_busy_dir(state, busy_dname)
+                    raise
+                try:
+                    self._send_spooled(
+                        200,
+                        sp,
+                        zsize,
+                        "application/zip",
+                        {"Content-Disposition": 'attachment; filename="veil_sanitized_release.zip"'},
+                    )
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             self._send_json(404, {"error": "Not found"})
 
         def do_POST(self) -> None:
+            try:
+                self._check_same_origin()
+            except UiApiError as exc:
+                self._send_json(exc.status_code, {"error": exc.message, "error_code": exc.code})
+                return
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
@@ -1584,16 +1773,18 @@ def make_handler(state: ServerState):
                         return
                     if jb["status"] in ("uploading", "queued", "running", "validating"):
                         jb["status"] = "cancelled"
-                        jb["stage"] = "Cancellation requested"
+                        jb["stage"] = "Cancelled by user"
+                        jb["error_code"] = "cancelled"
                         proc = state.job_procs.get(job_id)
                     else:
                         proc = None
+                    cur_status = jb["status"]
                 if proc is not None and proc.poll() is None:
                     try:
                         proc.terminate()
                     except OSError:
                         pass
-                self._send_json(200, {"job_id": job_id, "status": "cancelled"})
+                self._send_json(200, {"job_id": job_id, "status": cur_status})
                 return
 
             if path == "/api/run":
@@ -1615,7 +1806,7 @@ def make_handler(state: ServerState):
                         mode = str(fields.get("mode", "upload"))
                         policy_mode = str(fields.get("policy", "adaptive"))
                         secret = str(fields.get("secret") or "veil-command-center-demo-key")[:128]
-                        label = str(fields.get("label") or f"Uploaded Synthetic Dataset ({len(upload_mem)} files)")
+                        label = str(fields.get("label") or f"Uploaded Synthetic Dataset ({len(staged_meta)} files)")
                         sync_flag = str(fields.get("sync", "")).lower() in ("1", "true")
                         run_optional = str(fields.get("run_optional", "")).lower() in ("1", "true")
                     else:
@@ -1638,7 +1829,7 @@ def make_handler(state: ServerState):
                             label = str(req.get("label") or "Synthetic Multi-Hospital Bundle (demo/sample_hospital)")
                         elif mode == "upload":
                             upload_mem, staged_meta = _stage_uploaded_files(req.get("files", []), inp_dir)
-                            label = str(req.get("label") or f"Uploaded Synthetic Dataset ({len(upload_mem)} files)")
+                            label = str(req.get("label") or f"Uploaded Synthetic Dataset ({len(staged_meta)} files)")
                         else:
                             raise UiApiError(400, "upload_error", "mode must be 'demo' or 'upload'")
 
@@ -1656,8 +1847,12 @@ def make_handler(state: ServerState):
                 secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
                 with state.lock:
+                    state.job_seq += 1
+                    my_seq = state.job_seq
+                    state.latest_job_id = job_id
                     state.jobs[job_id] = {
                         "job_id": job_id,
+                        "seq": my_seq,
                         "status": "queued",
                         "progress": 10,
                         "stage": "Staged input · queued for VEIL engine",
@@ -1673,7 +1868,7 @@ def make_handler(state: ServerState):
                     def is_cancelled() -> bool:
                         with state.lock:
                             jb = state.jobs.get(job_id)
-                            return bool(jb and jb.get("status") == "cancelled")
+                            return bool((jb and jb.get("status") == "cancelled") or my_seq < state.job_seq)
 
                     def set_proc(p):
                         with state.lock:
@@ -1690,6 +1885,7 @@ def make_handler(state: ServerState):
                                 jb["progress"] = pct
                                 jb["stage"] = stage
 
+                    became_active = False
                     try:
                         payload = _build_primary_payload(
                             inp_dir,
@@ -1709,12 +1905,12 @@ def make_handler(state: ServerState):
 
                         with state.lock:
                             jb = state.jobs.get(job_id)
-                            if jb and jb["status"] == "cancelled":
-                                raise UiApiError(409, "cancelled", "Job cancelled before completion")
+                            if (jb and jb["status"] == "cancelled") or my_seq < state.job_seq:
+                                raise UiApiError(409, "cancelled", "Job cancelled or superseded before completion")
                             state.active = payload
                             state.active_job_id = job_id
-                            state.active_inp = inp_dir if mode == "demo" else None
-                            state.active_upload_bytes = upload_mem
+                            state.active_inp = inp_dir
+                            state.active_upload_bytes = None
                             state.active_out = out_dir
                             state.active_run_dir = run_dir
                             state.active_secret = secret
@@ -1726,6 +1922,7 @@ def make_handler(state: ServerState):
                             state.jobs[job_id]["stage"] = "Ready — sanitized release verified"
                             state.jobs[job_id]["engine_runtime_s"] = payload["runtime_s"]
                             state.jobs[job_id]["total_ui_s"] = payload["timings"]["total_ui_s"]
+                            became_active = True
                         _cleanup_old_workdirs(state)
                     except UiApiError as exc:
                         with state.lock:
@@ -1742,8 +1939,8 @@ def make_handler(state: ServerState):
                                 state.jobs[job_id]["error_code"] = "engine_failed"
                         shutil.rmtree(out_dir, ignore_errors=True)
                     finally:
-                        if mode == "upload" and inp_dir.exists():
-                            shutil.rmtree(inp_dir, ignore_errors=True)
+                        if not became_active:
+                            shutil.rmtree(run_dir, ignore_errors=True)
 
                 if sync_flag:
                     worker()
@@ -1783,6 +1980,7 @@ def make_handler(state: ServerState):
                 return
 
             if path == "/api/identity/run":
+                busy_dname: str | None = None
                 with state.lock:
                     active = state.active
                     inp = state.active_inp
@@ -1790,35 +1988,43 @@ def make_handler(state: ServerState):
                     out = state.active_out
                     pmode = state.active_policy_mode
                     ajid = state.active_job_id
+                    if active and out and (inp or upload_mem) and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
                 if not active or not out or not (inp or upload_mem):
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(400, {"error": "Run VEIL first before analyzing identity graph"})
                     return
-                t0 = time.monotonic()
-                if inp is not None:
-                    graph, decisions, qi_stats = _analyze_identity_and_qi(inp, out, pmode)
-                else:
-                    with tempfile.TemporaryDirectory(prefix="veil_ui_id_") as td:
-                        tp = Path(td)
-                        _materialize_mem_files(upload_mem or {}, tp)
-                        graph, decisions, qi_stats = _analyze_identity_and_qi(tp, out, pmode)
-                dt_s = round(time.monotonic() - t0, 3)
-                with state.lock:
-                    if state.active and state.active_job_id == ajid:
-                        state.active["identity_graph"] = graph
-                        state.active["identity_decisions"] = decisions
-                        state.active["qi_stats"] = qi_stats
-                        state.active["identity_status"] = "ready"
-                        state.active.setdefault("timings", {})["identity_s"] = dt_s
-                self._send_json(200, {
-                    "identity_status": "ready",
-                    "identity_s": dt_s,
-                    "identity_graph": graph,
-                    "identity_decisions": decisions[:50],
-                    "qi_stats": qi_stats,
-                })
+                try:
+                    t0 = time.monotonic()
+                    if inp is not None:
+                        graph, decisions, qi_stats = _analyze_identity_and_qi(inp, out, pmode)
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="veil_ui_id_") as td:
+                            tp = Path(td)
+                            _materialize_mem_files(upload_mem or {}, tp)
+                            graph, decisions, qi_stats = _analyze_identity_and_qi(tp, out, pmode)
+                    dt_s = round(time.monotonic() - t0, 3)
+                    with state.lock:
+                        if state.active and state.active_job_id == ajid:
+                            state.active["identity_graph"] = graph
+                            state.active["identity_decisions"] = decisions
+                            state.active["qi_stats"] = qi_stats
+                            state.active["identity_status"] = "ready"
+                            state.active.setdefault("timings", {})["identity_s"] = dt_s
+                    self._send_json(200, {
+                        "identity_status": "ready",
+                        "identity_s": dt_s,
+                        "identity_graph": graph,
+                        "identity_decisions": decisions[:50],
+                        "qi_stats": qi_stats,
+                    })
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             if path == "/api/arena/run":
+                busy_dname = None
                 with state.lock:
                     active = state.active
                     inp = state.active_inp
@@ -1830,88 +2036,106 @@ def make_handler(state: ServerState):
                     pmode = state.active_policy_mode
                     runtime_s = float(active.get("runtime_s", 0.0)) if active else 0.0
                     ajid = state.active_job_id
+                    if active and out and (inp or upload_mem) and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
                 if not active or not out or not (inp or upload_mem):
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(400, {"error": "Run VEIL first before benchmarking Privacy Arena"})
                     return
-                arena_dir = state.workdir / f"arena_{ajid or 'cur'}"
-                if inp is not None:
-                    arena, arena_s = _run_privacy_arena_cached(state, inp, out, arena_dir, secret, pmode, runtime_s, input_digest, secret_hash)
-                else:
-                    with tempfile.TemporaryDirectory(prefix="veil_ui_ar_") as td:
-                        tp = Path(td)
-                        _materialize_mem_files(upload_mem or {}, tp)
-                        arena, arena_s = _run_privacy_arena_cached(state, tp, out, arena_dir, secret, pmode, runtime_s, input_digest, secret_hash)
-                with state.lock:
-                    if state.active and state.active_job_id == ajid:
-                        state.active["privacy_arena"] = arena
-                        state.active["arena_status"] = "ready"
-                        state.active.setdefault("timings", {})["arena_s"] = arena_s
-                self._send_json(200, {"arena_status": "ready", "arena_s": arena_s, "privacy_arena": arena})
+                try:
+                    arena_dir = Path(tempfile.mkdtemp(prefix=f"arena_{ajid or 'cur'}_", dir=str(state.workdir)))
+                    if inp is not None:
+                        arena, arena_s = _run_privacy_arena_cached(state, inp, out, arena_dir, secret, pmode, runtime_s, input_digest, secret_hash)
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="veil_ui_ar_") as td:
+                            tp = Path(td)
+                            _materialize_mem_files(upload_mem or {}, tp)
+                            arena, arena_s = _run_privacy_arena_cached(state, tp, out, arena_dir, secret, pmode, runtime_s, input_digest, secret_hash)
+                    with state.lock:
+                        if state.active and state.active_job_id == ajid:
+                            state.active["privacy_arena"] = arena
+                            state.active["arena_status"] = "ready"
+                            state.active.setdefault("timings", {})["arena_s"] = arena_s
+                    self._send_json(200, {"arena_status": "ready", "arena_s": arena_s, "privacy_arena": arena})
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             if path == "/api/passport/corrupt":
+                busy_dname = None
                 with state.lock:
                     active = state.active
                     inp = state.active_inp
                     upload_mem = state.active_upload_bytes
                     out = state.active_out
                     ajid = state.active_job_id
+                    if active and out and (inp or upload_mem) and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
                 if (not inp and not upload_mem) or not out or not active:
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(400, {"error": "Run VEIL first before testing defect detection"})
                     return
-                bad_dir = out.parent / "output_corrupted"
-                if bad_dir.exists():
-                    shutil.rmtree(bad_dir)
-                shutil.copytree(out, bad_dir)
-                txt_cands = sorted((bad_dir / "sanitized").rglob("*.txt"))
-                target = next((p for p in txt_cands if re.search(r"\d+\s*mg", p.read_text(encoding="utf-8", errors="replace"))), None)
-                if target is None and txt_cands:
-                    target = txt_cands[0]
-                if target is None:
-                    target = bad_dir / "sanitized" / "injected_defect.txt"
-                    target.write_text("Tab. Paracetamol 550 mg\nCall 9876501234\n", encoding="utf-8")
-                else:
-                    orig_t = target.read_text(encoding="utf-8", errors="replace")
-                    mut_t = re.sub(r"(\d+)\s*mg", lambda m: f"{int(m.group(1)) + 50} mg", orig_t, count=1)
-                    target.write_text(mut_t + "\nCall 9876501234\n", encoding="utf-8")
-                if inp is not None:
-                    R_bad = VP.audit(inp, bad_dir)
-                else:
-                    with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
-                        tp = Path(td)
-                        _materialize_mem_files(upload_mem or {}, tp)
-                        R_bad = VP.audit(tp, bad_dir)
-                bad_html = VP.render_html(R_bad, None)
-                corr_obj = {
-                    "target_file": target.relative_to(bad_dir).as_posix(),
-                    "mutation": "Altered dosage (+50 mg) and injected unmasked contact number into release artifact.",
-                    "audit": R_bad,
-                    "html": bad_html,
-                }
-                with state.lock:
-                    if state.active and state.active_job_id == ajid:
-                        state.active["corrupted_passport"] = corr_obj
-                        state.active.setdefault("verification_history", []).insert(0, {
-                            "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
-                            "event": "Synthetic Fault Injection",
-                            "status": "FAIL",
-                            "summary": f"{corr_obj['target_file']}: " + "; ".join(R_bad["residual_risks"]),
-                        })
-                        hist = list(state.active["verification_history"])
+                try:
+                    bad_dir = out.parent / "output_corrupted"
+                    if bad_dir.exists():
+                        shutil.rmtree(bad_dir)
+                    shutil.copytree(out, bad_dir)
+                    (bad_dir / "sanitized").mkdir(parents=True, exist_ok=True)
+                    txt_cands = sorted((bad_dir / "sanitized").rglob("*.txt"))
+                    target = next((p for p in txt_cands if re.search(r"\d+\s*mg", p.read_text(encoding="utf-8", errors="replace"))), None)
+                    if target is None and txt_cands:
+                        target = txt_cands[0]
+                    if target is None:
+                        target = bad_dir / "sanitized" / "injected_defect.txt"
+                        target.write_text("Tab. Paracetamol 550 mg\nCall 9876501234\n", encoding="utf-8")
                     else:
-                        hist = []
-                self._send_json(200, {
-                    "status": "defect_detected",
-                    "corrupted_passport": {
-                        "target_file": corr_obj["target_file"],
-                        "mutation": corr_obj["mutation"],
+                        orig_t = target.read_text(encoding="utf-8", errors="replace")
+                        mut_t = re.sub(r"(\d+)\s*mg", lambda m: f"{int(m.group(1)) + 50} mg", orig_t, count=1)
+                        target.write_text(mut_t + "\nCall 9876501234\n", encoding="utf-8")
+                    if inp is not None:
+                        R_bad = VP.audit(inp, bad_dir)
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
+                            tp = Path(td)
+                            _materialize_mem_files(upload_mem or {}, tp)
+                            R_bad = VP.audit(tp, bad_dir)
+                    bad_html = VP.render_html(R_bad, None)
+                    corr_verdict = R_bad.get("verdict") or ("FAIL" if R_bad.get("residual_risks") else "WARNING")
+                    corr_obj = {
+                        "target_file": target.relative_to(bad_dir).as_posix(),
+                        "mutation": "Altered dosage (+50 mg) and injected unmasked contact number into release artifact.",
                         "audit": R_bad,
-                    },
-                    "verification_history": hist,
-                })
+                        "html": bad_html,
+                    }
+                    with state.lock:
+                        if state.active and state.active_job_id == ajid:
+                            state.active["corrupted_passport"] = corr_obj
+                            state.active.setdefault("verification_history", []).insert(0, {
+                                "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                                "event": "Synthetic Fault Injection",
+                                "status": corr_verdict,
+                                "summary": f"{corr_obj['target_file']}: " + "; ".join(R_bad["residual_risks"]),
+                            })
+                            hist = list(state.active["verification_history"])
+                        else:
+                            hist = []
+                    self._send_json(200, {
+                        "status": "defect_detected",
+                        "corrupted_passport": {
+                            "target_file": corr_obj["target_file"],
+                            "mutation": corr_obj["mutation"],
+                            "audit": R_bad,
+                        },
+                        "verification_history": hist,
+                    })
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             if path == "/api/passport/repair":
+                busy_dname = None
                 with state.lock:
                     active = state.active
                     inp = state.active_inp
@@ -1920,42 +2144,71 @@ def make_handler(state: ServerState):
                     secret = state.active_secret
                     policy_mode = state.active_policy_mode
                     ajid = state.active_job_id
+                    if active and out and (inp or upload_mem) and state.active_run_dir is not None:
+                        busy_dname = state.active_run_dir.name
+                        state.busy_run_dirs[busy_dname] += 1
                 if (not inp and not upload_mem) or not out or not active:
+                    _release_busy_dir(state, busy_dname)
                     self._send_json(400, {"error": "No active run to repair"})
                     return
-                if inp is not None:
-                    runtime_s, _ = _run_subprocess_engine(inp, out, secret, policy_mode)
-                    R_ok = VP.audit(inp, out)
-                else:
-                    with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
-                        tp = Path(td)
-                        _materialize_mem_files(upload_mem or {}, tp)
-                        runtime_s, _ = _run_subprocess_engine(tp, out, secret, policy_mode)
-                        R_ok = VP.audit(tp, out)
-                html_ok = VP.render_html(R_ok, None)
-                with state.lock:
-                    if state.active and state.active_job_id == ajid:
-                        state.active["passport"] = R_ok
-                        state.active["passport_html"] = html_ok
-                        state.active["passport_status"] = "verified"
-                        state.active["corrupted_passport"] = None
-                        state.active["runtime_s"] = runtime_s
-                        state.active.setdefault("verification_history", []).insert(0, {
-                            "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
-                            "event": "VEIL Clean Re-run & Repair",
-                            "status": "PASS" if not R_ok["residual_risks"] else "FAIL",
-                            "summary": f"{R_ok['identity']['pseudonym_present_in_exact_record']} exact records · {R_ok['clinical']['occurrence_totals']} clinical · repaired in {runtime_s}s",
-                        })
-                        hist = list(state.active["verification_history"])
-                    else:
-                        hist = []
-                self._send_json(200, {
-                    "status": "repaired",
-                    "passport": R_ok,
-                    "passport_status": "verified",
-                    "runtime_s": runtime_s,
-                    "verification_history": hist,
-                })
+                try:
+                    repair_out = Path(tempfile.mkdtemp(prefix="output_repair_", dir=str(out.parent)))
+                    try:
+                        if inp is not None:
+                            runtime_s, _ = _run_subprocess_engine(inp, repair_out, secret, policy_mode)
+                            rep_new = _validate_release_contract(inp, repair_out)
+                            file_index, clinical_detail, transformations = _extract_fast_summary(inp, repair_out, rep_new)
+                            R_ok = VP.audit(inp, repair_out)
+                        else:
+                            with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
+                                tp = Path(td)
+                                _materialize_mem_files(upload_mem or {}, tp)
+                                runtime_s, _ = _run_subprocess_engine(tp, repair_out, secret, policy_mode)
+                                rep_new = _validate_release_contract(tp, repair_out)
+                                file_index, clinical_detail, transformations = _extract_fast_summary(tp, repair_out, rep_new)
+                                R_ok = VP.audit(tp, repair_out)
+                        old_backup = out.parent / f"output_old_{threading.get_ident()}"
+                        if old_backup.exists():
+                            shutil.rmtree(old_backup, ignore_errors=True)
+                        if out.exists():
+                            out.rename(old_backup)
+                        repair_out.rename(out)
+                        shutil.rmtree(old_backup, ignore_errors=True)
+                    finally:
+                        if repair_out.exists() and repair_out != out:
+                            shutil.rmtree(repair_out, ignore_errors=True)
+                    shutil.rmtree(out.parent / "output_corrupted", ignore_errors=True)
+                    html_ok = VP.render_html(R_ok, None)
+                    verdict_ok = R_ok.get("verdict") or ("PASS" if not R_ok["residual_risks"] else "FAIL")
+                    with state.lock:
+                        if state.active and state.active_job_id == ajid:
+                            state.active["report"] = rep_new
+                            state.active["file_pairs"] = file_index
+                            state.active["clinical_detail"] = clinical_detail
+                            state.active["transformations"] = transformations
+                            state.active["passport"] = R_ok
+                            state.active["passport_html"] = html_ok
+                            state.active["passport_status"] = "verified"
+                            state.active["corrupted_passport"] = None
+                            state.active["runtime_s"] = runtime_s
+                            state.active.setdefault("verification_history", []).insert(0, {
+                                "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
+                                "event": "VEIL Clean Re-run & Repair",
+                                "status": verdict_ok,
+                                "summary": f"{R_ok['identity']['pseudonym_present_in_exact_record']} exact records · {R_ok['clinical']['occurrence_totals']} clinical · {verdict_ok} · repaired in {runtime_s}s",
+                            })
+                            hist = list(state.active["verification_history"])
+                        else:
+                            hist = []
+                    self._send_json(200, {
+                        "status": "repaired",
+                        "passport": R_ok,
+                        "passport_status": "verified",
+                        "runtime_s": runtime_s,
+                        "verification_history": hist,
+                    })
+                finally:
+                    _release_busy_dir(state, busy_dname)
                 return
 
             self._send_json(404, {"error": "Not found"})
@@ -1982,6 +2235,7 @@ def _ensure_passport_audited(state: ServerState, inp: Path | None, upload_mem: d
         dt_s = round(time.monotonic() - t0, 3)
         with state.lock:
             if state.active and (job_id is None or state.active_job_id == job_id):
+                v_state = audit_res.get("verdict") or ("PASS" if not audit_res["residual_risks"] else "FAIL")
                 state.active["passport"] = audit_res
                 state.active["passport_html"] = html_res
                 state.active["passport_status"] = "verified"
@@ -1989,8 +2243,8 @@ def _ensure_passport_audited(state: ServerState, inp: Path | None, upload_mem: d
                 state.active.setdefault("verification_history", []).insert(0, {
                     "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
                     "event": "On-Demand Assurance 3.0 Audit",
-                    "status": "PASS" if not audit_res["residual_risks"] else "FAIL",
-                    "summary": f"{audit_res['identity']['pseudonym_present_in_exact_record']} exact records · {audit_res['clinical']['occurrence_totals']} clinical · audited in {dt_s}s"
+                    "status": v_state,
+                    "summary": f"{audit_res['identity']['pseudonym_present_in_exact_record']} exact records · {audit_res['clinical']['occurrence_totals']} clinical · {v_state} · audited in {dt_s}s"
                     if not audit_res["residual_risks"]
                     else "; ".join(audit_res["residual_risks"]),
                 })
@@ -2039,8 +2293,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="VEIL — Clinical Privacy Command Center (offline local UI)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--demo", action="store_true", help="Pre-run VEIL on demo/sample_hospital on startup")
-    ap.add_argument("--open", action="store_true", help="Open browser tab automatically")
+    ap.add_argument("--demo", action=argparse.BooleanOptionalAction, default=False, help="Pre-run VEIL on demo/sample_hospital on startup")
+    ap.add_argument("--open", action=argparse.BooleanOptionalAction, default=False, help="Open browser tab automatically")
     args = ap.parse_args()
 
     srv, _ = create_server(host=args.host, port=args.port, preload_demo=args.demo)

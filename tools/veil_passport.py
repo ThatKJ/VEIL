@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VEIL Privacy Passport 2.0: offline record/field/temporal release-assurance audit.
+"""VEIL Privacy Passport 3.0: offline record/field/temporal release-assurance audit.
 
 Development / demo tool only. It is NOT imported by main.py and is not needed at evaluation time.
 
@@ -166,14 +166,24 @@ def _harvest_independent_identifiers(inp: Path) -> tuple[set[str], set[str]]:
     for p in sorted(inp.rglob("*")):
         if not p.is_file() or p.is_symlink():
             continue
-        t = decode(p.read_bytes()[:20_000_000])
-        if p.suffix.lower() == ".json":
+        with p.open("rb") as fh:
+            t = decode(fh.read(20_000_000))
+        suf = p.suffix.lower()
+        if suf == ".json":
             try:
                 walk(json.loads(t))
             except (ValueError, RecursionError):
                 pass
-        elif p.suffix.lower() in (".csv", ".tsv"):
-            delim = _tabular_delim(p.suffix.lower(), t)
+        elif suf in (".jsonl", ".ndjson"):
+            for ln in t.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    walk(json.loads(ln))
+                except (ValueError, RecursionError):
+                    pass
+        elif suf in (".csv", ".tsv"):
+            delim = _tabular_delim(suf, t)
             try:
                 rows = list(csv.reader(io.StringIO(t), delimiter=delim))
             except csv.Error:
@@ -312,18 +322,27 @@ class _ParsedOutputFile:
         self.rows = None
         self.obj = None
         self.lines = None
+        self.parse_error = False
         if self.suf in (".csv", ".tsv"):
             try:
                 self.rows = list(csv.reader(io.StringIO(self.text), delimiter=_tabular_delim(self.suf, self.text)))
             except csv.Error:
                 self.rows = []
+                self.parse_error = True
         elif self.suf in (".jsonl", ".ndjson"):
             self.lines = [ln for ln in self.text.splitlines() if ln.strip()]
+            for ln in self.lines[:500]:
+                try:
+                    json.loads(ln)
+                except ValueError:
+                    self.parse_error = True
+                    break
         elif self.suf == ".json":
             try:
                 self.obj = json.loads(self.text)
             except ValueError:
                 self.obj = None
+                self.parse_error = True
 
     def resolve_record(self, loc: str, skip_dob: bool = False) -> tuple[str, bool]:
         if loc in ("doc", "@file"):
@@ -472,6 +491,8 @@ def audit(inp: Path, out: Path) -> dict:
             in_parsed_cache[p] = ipf
         suf = o.suffix.lower()
         try:
+            if pf.parse_error:
+                raise ValueError("malformed_exported_file")
             if suf == ".json":
                 obj = pf.obj if pf.obj is not None else json.loads(pf.text)
                 rok, rtot, dok, dtot = _audit_fhir_bundle(obj)
@@ -524,6 +545,21 @@ def audit(inp: Path, out: Path) -> dict:
         len(in_pairs),
         "1:1 SHA-256 accounting, valid parses, zero unexpected exports or unsafe paths",
     )
+    if not struct_ok:
+        struct_errs = []
+        if accounted != len(in_pairs):
+            struct_errs.append(f"accounting {accounted}/{len(in_pairs)}")
+        if missing_out:
+            struct_errs.append(f"{len(missing_out)} missing declared output(s)")
+        if parse_fail:
+            struct_errs.append(f"{parse_fail} output parse failure(s)")
+        if unexpected_exports:
+            struct_errs.append(f"{unexpected_exports} unexpected export(s)")
+        if unsafe_paths:
+            struct_errs.append(f"{unsafe_paths} unsafe symlink/path(s)")
+        if not honest:
+            struct_errs.append("report.json counts mismatch exported artifacts")
+        R["residual_risks"].append("Structural verification failed: " + ", ".join(struct_errs))
 
     # ---------------- A. Privacy residue (independent detectors + O(N + L) indexed lookup + exact assigned-PSN PAN context)
     ident, inst_vals = _harvest_independent_identifiers(inp)
@@ -694,7 +730,7 @@ def audit(inp: Path, out: Path) -> dict:
     note_eligible = note_t_ok + note_t_fail
     R["clinical"] = {
         "protected_values": {k: f"{kept_cat[k]}/{tot_cat[k]}" for k in tot_cat},
-        "protected_values_kept_pct": clin_pct if clin_pct is not None else 0.0,
+        "protected_values_kept_pct": clin_pct,
         "occurrence_totals": f"{kept_clin}/{tot_clin}",
         "notes_with_intervals_preserved": f"{note_t_ok}/{note_eligible}" if note_eligible else f"0/0 (skipped:{t_skip}, inconclusive:{t_inconc})",
     }
@@ -714,6 +750,8 @@ def audit(inp: Path, out: Path) -> dict:
         )
     if t_fail:
         R["residual_risks"].append(f"{t_fail} document/patient date interval checks failed chronological offset preservation")
+    if fhir_dates_ok < fhir_dates_tot:
+        R["residual_risks"].append(f"{fhir_dates_tot - fhir_dates_ok} invalid FHIR R4 date/dateTime values")
 
     R["checks"]["clinical"] = _make_check(
         "SKIPPED" if tot_clin == 0 else ("PASS" if lost == 0 else "FAIL"),
@@ -721,16 +759,23 @@ def audit(inp: Path, out: Path) -> dict:
         tot_clin,
         "Occurrence-aware preservation of medications, doses, frequencies, BP, labs, ICD-10, and staff",
     )
+    if t_fail > 0 or fhir_dates_ok < fhir_dates_tot:
+        temp_st = "FAIL"
+    elif (t_eligible + cross_ok + fhir_dates_tot) > 0:
+        temp_st = "WARNING" if t_inconc > 0 else "PASS"
+    elif t_inconc > 0:
+        temp_st = "INCONCLUSIVE"
+    else:
+        temp_st = "SKIPPED"
     R["checks"]["temporal"] = _make_check(
-        "PASS" if ((t_eligible + cross_ok) > 0 and t_fail == 0 and fhir_dates_ok == fhir_dates_tot)
-        else ("FAIL" if (t_fail > 0 or fhir_dates_ok < fhir_dates_tot)
-              else ("INCONCLUSIVE" if t_inconc > 0 else "SKIPPED")),
+        temp_st,
         t_ok + cross_ok + fhir_dates_ok,
         t_eligible + cross_ok + fhir_dates_tot,
         f"Per-record & cross-record role-aware temporal + FHIR date checks (skipped={t_skip}, inconclusive={t_inconc})",
     )
 
     # ---------------- C. Record-level identity verification (exact loc/out resolution)
+    out_resolved = out.resolve()
     linked = [r for r in recs if r.get("patient")]
     loc_valid = 0
     exact_placed = 0
@@ -738,7 +783,10 @@ def audit(inp: Path, out: Path) -> dict:
         rf = r["file"]
         pf = parsed_cache.get(rf)
         if pf is None:
-            pf = _ParsedOutputFile(out / rf)
+            cand = (out / rf).resolve()
+            if not cand.is_relative_to(out_resolved):
+                continue
+            pf = _ParsedOutputFile(cand)
             parsed_cache[rf] = pf
         target_loc = str(r.get("out") or r.get("loc") or "")
         rec_text, found = pf.resolve_record(target_loc)
@@ -835,7 +883,7 @@ th{{color:var(--mut);font-weight:500;width:45%}} ul{{padding-left:20px}} .note{{
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="VEIL Privacy Passport 2.0 (offline release-assurance audit)")
+    ap = argparse.ArgumentParser(description="VEIL Privacy Passport 3.0 (offline release-assurance audit)")
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--metrics", help="optional harness metrics.json (synthetic-truth development metrics)")

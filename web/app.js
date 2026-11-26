@@ -12,6 +12,8 @@
     stagedFiles: [], // [{ id, path, origPath, renamed, size, file }]
     activeJobId: null,
     isSubmitting: false,
+    inspectorReqId: 0,
+    decisionsReqId: 0,
     diffCache: new Map(),
     renderedViews: new Set(),
   };
@@ -23,14 +25,15 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function highlightSanitized(text) {
     let out = esc(text);
     out = out.replace(/\[(NAME|RELATIVE|PHONE|AADHAAR|ABHA|PAN|EMAIL|ID|INSURANCE|PIN|VILLAGE|DISTRICT|DATE|AGE|REDACTED)\]/g, '<span class="tok-tag">[$1]</span>');
     out = out.replace(/\bPSN-[0-9A-Z]{6,16}\b/g, '<span class="tok-psn">$&</span>');
-    out = out.replace(/\b(?:Dr\.|N\/O|DEO)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g, '<span class="tok-staff">$&</span>');
+    out = out.replace(/\b(?:Dr\.|Sr\.|Sis\.|N\/O|DEO)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g, '<span class="tok-staff">$&</span>');
     return out;
   }
 
@@ -93,6 +96,42 @@
     $("btn-quick-demo").disabled = busy;
     $("btn-run-demo").disabled = busy;
     $("btn-run-uploaded").disabled = busy || state.stagedFiles.length === 0;
+    if ($("btn-clear-staged")) $("btn-clear-staged").disabled = busy;
+    if ($("file-input")) $("file-input").disabled = busy;
+    if ($("dropzone")) {
+      $("dropzone").setAttribute("aria-disabled", busy ? "true" : "false");
+      $("dropzone").style.pointerEvents = busy ? "none" : "";
+      $("dropzone").style.opacity = busy ? "0.6" : "";
+    }
+    document.querySelectorAll(".staged-rm").forEach((b) => { b.disabled = busy; });
+  }
+
+  function setExportControlsReady(ready, corrupted) {
+    const suffix = corrupted ? "?variant=corrupt" : "";
+    const links = [
+      ["btn-download-zip", "/api/download/zip"],
+      ["btn-export-zip", "/api/download/zip"],
+      ["btn-export-passport-html", `/api/passport/html${suffix}`],
+      ["btn-export-passport-json", `/api/passport/json${suffix}`],
+    ];
+    for (const [id, href] of links) {
+      const el = $(id);
+      if (!el) continue;
+      el.setAttribute("href", href);
+      el.setAttribute("aria-disabled", ready ? "false" : "true");
+      el.dataset.disabled = ready ? "0" : "1";
+      el.style.opacity = ready ? "" : "0.45";
+      el.style.pointerEvents = ready ? "" : "none";
+    }
+  }
+
+  for (const id of ["btn-download-zip", "btn-export-zip", "btn-export-passport-html", "btn-export-passport-json"]) {
+    const el = $(id);
+    if (el) {
+      el.addEventListener("click", (e) => {
+        if (el.dataset.disabled === "1") e.preventDefault();
+      });
+    }
   }
 
   function showProgress(pct, stage, showCancel = false) {
@@ -356,8 +395,10 @@
         </span>
       </div>`).join("");
     listEl.querySelectorAll("[data-remove]").forEach((btn) => {
+      btn.disabled = state.isSubmitting;
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (state.isSubmitting) return;
         const ridx = Number(btn.dataset.remove);
         state.stagedFiles.splice(ridx, 1);
         clearValidationError();
@@ -368,6 +409,7 @@
   }
 
   function stageFiles(fileList) {
+    if (state.isSubmitting) return;
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
     clearValidationError();
@@ -408,24 +450,25 @@
   }
 
   $("btn-clear-staged").addEventListener("click", () => {
+    if (state.isSubmitting) return;
     state.stagedFiles = [];
     clearValidationError();
     renderStagedList();
   });
 
-  dz.addEventListener("click", () => fi.click());
+  dz.addEventListener("click", () => { if (!state.isSubmitting) fi.click(); });
   dz.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      fi.click();
+      if (!state.isSubmitting) fi.click();
     }
   });
-  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); if (!state.isSubmitting) dz.classList.add("drag"); });
   dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
   dz.addEventListener("drop", (e) => {
     e.preventDefault();
     dz.classList.remove("drag");
-    if (e.dataTransfer?.files?.length) stageFiles(e.dataTransfer.files);
+    if (!state.isSubmitting && e.dataTransfer?.files?.length) stageFiles(e.dataTransfer.files);
   });
   fi.addEventListener("change", () => {
     if (fi.files?.length) stageFiles(fi.files);
@@ -460,6 +503,7 @@
     $("active-dataset-title").textContent = d.dataset_label || "Active Dataset";
 
     if (!d.ready) {
+      setExportControlsReady(false, false);
       renderBenchmarks(d.historical_benchmarks);
       setStatus("Awaiting Dataset", "status-warn");
       const saved = getSavedJobId();
@@ -467,13 +511,19 @@
       return;
     }
 
+    setExportControlsReady(true, Boolean(d.corrupted_passport));
     const pass = d.passport || {};
     const isVerified = d.passport_status === "verified";
     const residue = Object.values(pass.privacy?.residual_pattern_hits || {}).reduce((a, b) => a + b, 0);
-    if (!isVerified) {
+    const verdict = pass.verdict || (residue === 0 && !(pass.residual_risks || []).length ? "PASS" : "FAIL");
+    if (d.corrupted_passport) {
+      setStatus("Review Risks", "status-fail");
+    } else if (!isVerified) {
       setStatus("Sanitized Ready · Audit Pending", "status-warn");
-    } else if (residue === 0 && !d.corrupted_passport && !(pass.residual_risks || []).length) {
+    } else if (verdict === "PASS" && residue === 0 && !(pass.residual_risks || []).length) {
       setStatus("Verified PASS", "status-ok");
+    } else if (verdict === "WARNING" || verdict === "INCONCLUSIVE" || verdict === "SKIPPED") {
+      setStatus(`Verified ${verdict}`, "status-warn");
     } else {
       setStatus("Review Risks", "status-fail");
     }
@@ -517,16 +567,19 @@
   function renderOverview(d, rep, pass, residue) {
     const c = rep.counts;
     const isVerified = d.passport_status === "verified";
+    const idReady = d.identity_status === "ready";
     const decCounts = d.identity_graph?.decision_counts || {};
-    const vetoes = decCounts.rejected ?? 0;
+    const vetoesText = idReady ? `${decCounts.rejected ?? 0} sampled vetoes` : "identity pending";
     const distinctPsns = isVerified ? pass.identity.distinct_pseudonyms : (d.identity_graph?.meta?.total_clusters || "--");
-    const clinVal = isVerified && pass.clinical?.protected_values_kept_pct != null ? `${pass.clinical.protected_values_kept_pct}%` : "Pending";
+    const clinPct = pass.clinical?.protected_values_kept_pct;
+    const clinVal = !isVerified ? "Pending" : (clinPct == null ? "N/A" : `${clinPct}%`);
     const clinSub = isVerified ? `Intervals ${pass.clinical.notes_with_intervals_preserved}` : "Run Passport Audit to measure";
+    const verdictLabel = d.corrupted_passport ? "DEFECT INJECTED (FAIL)" : (isVerified ? `VERIFIED ${pass.verdict || "PASS"}` : "PENDING ON-DEMAND AUDIT");
 
     $("overview-kpis").innerHTML = [
       { label: "Files Processed", val: `${c.files_sanitized}/${c.files_total}`, sub: `${c.files_quarantined} fail-closed quarantined` },
       { label: "Residual Identifier Hits", val: isVerified ? `${residue}` : "Pending", sub: isVerified ? `Across ${pass.privacy.channels_scanned} channels` : "Run Privacy Passport to audit", warn: !isVerified || residue > 0 },
-      { label: "Linked Records", val: `${c.records_linked}/${c.records_processed}`, sub: `Clusters: ${distinctPsns} · ${vetoes} sampled vetoes` },
+      { label: "Linked Records", val: `${c.records_linked}/${c.records_processed}`, sub: `Clusters: ${distinctPsns} · ${vetoesText}` },
       { label: "Clinical Probes Kept", val: clinVal, sub: clinSub, warn: !isVerified },
       { label: "Engine Runtime (1x)", val: `${d.runtime_s}s`, sub: `Total UI ${d.timings?.total_ui_s ?? d.runtime_s}s · RSS ${rep.resources?.peak_rss_mb ?? "--"} MB` },
     ].map((k) => `
@@ -541,10 +594,10 @@
       <table class="data-table">
         <tr><th>Run Timestamp</th><td class="mono">${esc(d.run_at)}</td></tr>
         <tr><th>Identifiers Detected</th><td class="mono">${c.identifiers_detected}</td></tr>
-        <tr><th>Passport Verification Status</th><td class="mono">${isVerified ? "VERIFIED PASS/COMPLETE" : "PENDING ON-DEMAND AUDIT"}</td></tr>
+        <tr><th>Passport Verification Status</th><td class="mono">${esc(verdictLabel)}</td></tr>
         <tr><th>Engine vs Total UI Time</th><td class="mono">${d.runtime_s}s engine / ${d.timings?.total_ui_s ?? d.runtime_s}s total</td></tr>
         <tr><th>Table Row Counts Preserved</th><td class="mono">${esc(pass.structural?.tables_row_count_preserved ?? "Validated")}</td></tr>
-        <tr><th>Scale Proven Benchmark</th><td class="mono">${esc(d.historical_benchmarks.scale.records)} in ${d.historical_benchmarks.scale.seconds}s (${d.historical_benchmarks.scale.peak_rss_mb} MB)</td></tr>
+        <tr><th>Historical Scale Benchmark</th><td class="mono">${esc(d.historical_benchmarks.scale.records)} in ${d.historical_benchmarks.scale.seconds}s (${d.historical_benchmarks.scale.peak_rss_mb} MB)</td></tr>
       </table>`;
 
     const tr = d.transformations || [];
@@ -596,15 +649,22 @@
     }
     $("inspector-tag-detail").innerHTML = chips.join("") || `<div class="muted">No identifier tokens sampled in this file.</div>`;
 
-    const ckey = `${d.job_id || "cur"}:${state.selectedFileIdx}`;
+    const reqIdx = state.selectedFileIdx;
+    const reqJobId = d.job_id || "cur";
+    const ckey = `${reqJobId}:${reqIdx}`;
     let diff = state.diffCache.get(ckey);
     if (!diff) {
+      const reqToken = ++state.inspectorReqId;
       $("diff-input-pre").textContent = "Loading bounded file preview...";
       $("diff-output-pre").textContent = "Loading bounded sanitized preview...";
       try {
-        diff = await apiFetchJson(`/api/diff?idx=${state.selectedFileIdx}`);
+        diff = await apiFetchJson(`/api/diff?idx=${reqIdx}`);
+        if (state.inspectorReqId !== reqToken || (state.data?.job_id || "cur") !== reqJobId || state.selectedFileIdx !== reqIdx) {
+          return;
+        }
         state.diffCache.set(ckey, diff);
       } catch (err) {
+        if (state.inspectorReqId !== reqToken) return;
         $("diff-input-pre").textContent = `Preview unavailable: ${err.message}`;
         $("diff-output-pre").textContent = "";
         return;
@@ -620,6 +680,7 @@
     const svg = $("identity-svg");
 
     if (d.identity_status !== "ready") {
+      svg.setAttribute("viewBox", "0 0 980 430");
       $("graph-subset-badge").textContent = "Analysis pending (on-demand)";
       svg.innerHTML = `<text x="490" y="210" fill="#94a3b8" font-size="14" text-anchor="middle">Identity graph &amp; veto inspection runs on demand for fast uploads. Click "Analyze Identity Graph".</text>`;
       return;
@@ -633,7 +694,7 @@
       : `${clusters.length} clusters · ${recs.length} records (100%)`;
     $("graph-subset-badge").textContent = subsetLabel;
 
-    const W = 980;
+    const W = Math.max(980, clusters.length * 140);
     const cCount = Math.max(1, clusters.length);
     const pos = {};
     const hubs = [];
@@ -667,9 +728,18 @@
       });
     });
 
+    const unlinkedCols = Math.max(1, Math.floor((W - 108) / 96));
+    const unlinkedRows = Math.ceil(unlinked.length / unlinkedCols);
+    const H = Math.max(430, 365 + unlinkedRows * 46);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
     unlinked.forEach((r, idx) => {
-      pos[r.id] = { x: Math.max(60, W - 95 - idx * 80), y: 365 };
-      recNodes.push({ ...r, x: pos[r.id].x, y: pos[r.id].y });
+      const col = idx % unlinkedCols;
+      const row = Math.floor(idx / unlinkedCols);
+      const x = 60 + col * 96;
+      const y = 365 + row * 44;
+      pos[r.id] = { x, y };
+      recNodes.push({ ...r, x, y });
     });
 
     const parts = [];
@@ -757,7 +827,17 @@
       renderDecisionsPage();
     };
 
-    const res = await apiFetchJson(`/api/decisions?filter=${encodeURIComponent(state.decisionFilter)}&page=${state.decisionPage}&limit=${DECISIONS_PAGE_LIMIT}`);
+    const decReqToken = ++state.decisionsReqId;
+    const targetJobId = state.data?.job_id;
+    let res;
+    try {
+      res = await apiFetchJson(`/api/decisions?filter=${encodeURIComponent(state.decisionFilter)}&page=${state.decisionPage}&limit=${DECISIONS_PAGE_LIMIT}`);
+    } catch (err) {
+      if (state.decisionsReqId !== decReqToken) return;
+      $("decisions-table").innerHTML = `<thead><tr><th>Decision</th><th>Channel A</th><th>Channel B</th><th>Scripts</th><th>Link / Cannot-Link Rationale (No Raw PII)</th></tr></thead><tbody><tr><td colspan="5" class="muted">Failed to load decisions: ${esc(err.message)}</td></tr></tbody>`;
+      return;
+    }
+    if (state.decisionsReqId !== decReqToken || state.data?.job_id !== targetJobId) return;
     const list = res.items || [];
     const total = res.total_filtered || 0;
     const badgeCls = { matched: "badge-ok", rejected: "badge-fail", ambiguous: "badge-warn" };
@@ -773,17 +853,20 @@
         </tr>`).join("") || `<tr><td colspan="5" class="muted">No decisions loaded (run Identity Analysis if pending).</td></tr>`}</tbody>`;
     const startIdx = total ? state.decisionPage * DECISIONS_PAGE_LIMIT + 1 : 0;
     const endIdx = Math.min(total, (state.decisionPage + 1) * DECISIONS_PAGE_LIMIT);
-    $("dec-page-info").textContent = `Showing ${startIdx}–${endIdx} of ${total} (${res.decision_counts?.truncated ? "bounded candidate sample" : "exact"})`;
+    $("dec-page-info").textContent = `Showing ${startIdx}–${endIdx} of ${total} (${res.decision_counts?.truncated ? "bounded sample" : "exact"})`;
     $("dec-prev").disabled = state.decisionPage === 0;
     $("dec-next").disabled = endIdx >= total;
   }
 
   $("btn-run-identity").addEventListener("click", async () => {
+    if (!state.data?.ready) return;
+    const targetJobId = state.data.job_id;
     const btn = $("btn-run-identity");
     btn.disabled = true;
     btn.textContent = "Analyzing...";
     try {
       const res = await apiFetchJson("/api/identity/run", { method: "POST" });
+      if (state.data?.job_id !== targetJobId) return;
       state.data.identity_status = "ready";
       state.data.identity_graph = res.identity_graph;
       state.data.identity_decisions = res.identity_decisions;
@@ -807,6 +890,7 @@
       $("arena-table").innerHTML = "";
       return;
     }
+    const fmtPct = (v) => (v == null ? "N/A" : `${v}%`);
     $("arena-cards").innerHTML = arena.map((a) => `
       <div class="arena-card ${a.mode === "adaptive" ? "winner" : ""}">
         <div class="card-head" style="margin-bottom:8px">
@@ -818,7 +902,7 @@
         <div class="meta-row"><span>6-Digit PINs Visible</span><strong class="mono">${a.exact_pins_visible}</strong></div>
         <div class="meta-row"><span>10-Yr Adaptive Escalations</span><strong class="mono">${a.qi.band_10y_patients}</strong></div>
         <div class="meta-row"><span>Districts Suppressed</span><strong class="mono">${a.qi.district_dropped_patients}</strong></div>
-        <div class="meta-row"><span>Clinical Values Kept</span><strong class="mono">${a.clinical_kept_pct}%</strong></div>
+        <div class="meta-row"><span>Clinical Values Kept</span><strong class="mono">${fmtPct(a.clinical_kept_pct)}</strong></div>
       </div>`).join("");
 
     $("arena-table").innerHTML = `
@@ -831,17 +915,20 @@
           <td class="mono">${a.qi.band_10y_patients}</td>
           <td class="mono">${a.qi.district_dropped_patients}</td>
           <td class="mono">${a.residual_hits}</td>
-          <td class="mono">${a.clinical_kept_pct}%</td>
+          <td class="mono">${fmtPct(a.clinical_kept_pct)}</td>
           <td class="mono">${a.runtime_s}s${a.reused_from_active_run ? " (reused)" : ""}</td>
         </tr>`).join("")}</tbody>`;
   }
 
   $("btn-run-arena").addEventListener("click", async () => {
+    if (!state.data?.ready) return;
+    const targetJobId = state.data.job_id;
     const btn = $("btn-run-arena");
     btn.disabled = true;
     btn.textContent = "Benchmarking...";
     try {
       const res = await apiFetchJson("/api/arena/run", { method: "POST" });
+      if (state.data?.job_id !== targetJobId) return;
       state.data.arena_status = "ready";
       state.data.privacy_arena = res.privacy_arena;
       renderArena(state.data);
@@ -857,8 +944,9 @@
     const pass = d.passport || {};
     const det = d.clinical_detail || {};
     const isVerified = d.passport_status === "verified";
+    const clinPct = pass.clinical?.protected_values_kept_pct;
     $("los-badge").textContent = `Intervals Kept: ${pass.clinical?.notes_with_intervals_preserved ?? "Pending"}`;
-    $("clin-pct-badge").textContent = isVerified ? `${pass.clinical.protected_values_kept_pct}% Kept` : "Audit Pending";
+    $("clin-pct-badge").textContent = !isVerified ? "Audit Pending" : (clinPct == null ? "N/A (0 probes)" : `${clinPct}% Kept`);
 
     const tl = det.timeline_intervals || [];
     $("timeline-cards").innerHTML = tl.map((t) => `
@@ -868,8 +956,8 @@
           <span class="badge ${t.preserved ? "badge-ok" : "badge-fail"}">LOS Delta: ${t.los_delta_days} days</span>
         </div>
         <div class="card-sub">
-          Input window: <code>${esc(t.input_dates[0])} -> ${esc(t.input_dates[1])}</code> (${t.input_los_days}d)
-          &nbsp;|&nbsp; Shifted (+${t.patient_shift_days}d): <code>${esc(t.output_dates[0])} -> ${esc(t.output_dates[1])}</code> (${t.output_los_days}d)
+          Input window: <code>${esc(t.input_dates[0])} -> ${esc(t.input_dates[t.input_dates.length - 1])}</code> (${t.input_los_days}d)
+          &nbsp;|&nbsp; Shifted (+${t.patient_shift_days}d): <code>${esc(t.output_dates[0])} -> ${esc(t.output_dates[t.output_dates.length - 1])}</code> (${t.output_los_days}d)
         </div>
       </div>`).join("") || `<div class="muted">No multi-date clinical notes sampled in preview.</div>`;
 
@@ -903,9 +991,12 @@
     const isVerified = d.passport_status === "verified";
     const activeAudit = corr ? corr.audit : (d.passport || {});
     const risks = activeAudit.residual_risks || [];
-    const isClean = isVerified && risks.length === 0 && !corr;
+    const verdict = activeAudit.verdict || (risks.length === 0 ? "PASS" : "FAIL");
+    const clinPct = activeAudit.clinical?.protected_values_kept_pct;
+    const clinSummary = clinPct == null ? "no clinical probes matched" : `${clinPct}% protected clinical expressions preserved`;
 
     $("btn-repair-demo").classList.toggle("hidden", !corr);
+    setExportControlsReady(Boolean(d.ready), Boolean(corr));
     const banner = $("passport-banner");
     if (!isVerified && !corr) {
       banner.className = "passport-banner pending";
@@ -913,12 +1004,15 @@
     } else if (corr) {
       banner.className = "passport-banner fail";
       banner.innerHTML = `SYNTHETIC DEFECT CAUGHT IN <code>${esc(corr.target_file)}</code>: ${esc(corr.mutation)} Alerts: ${esc(risks.join(" | "))}`;
-    } else if (isClean) {
+    } else if (verdict === "PASS" && risks.length === 0) {
       banner.className = "passport-banner ok";
-      banner.textContent = `RELEASE AUDIT PASSED: 0 residual identifier hits across ${activeAudit.privacy.channels_scanned} channels · ${activeAudit.clinical.protected_values_kept_pct}% protected clinical expressions preserved · ${activeAudit.structural.exported}/${activeAudit.structural.input_files} sanitized (${activeAudit.structural.quarantined} quarantined).`;
+      banner.textContent = `RELEASE AUDIT PASSED: 0 residual identifier hits across ${activeAudit.privacy.channels_scanned} channels · ${clinSummary} · ${activeAudit.structural.exported}/${activeAudit.structural.input_files} sanitized (${activeAudit.structural.quarantined} quarantined).`;
+    } else if (verdict === "WARNING" || verdict === "INCONCLUSIVE" || verdict === "SKIPPED") {
+      banner.className = "passport-banner pending";
+      banner.textContent = `AUDIT ${verdict}: ${activeAudit.privacy.channels_scanned} channels scanned · ${clinSummary}${risks.length ? " · Notes: " + risks.join(" | ") : ""}`;
     } else {
       banner.className = "passport-banner fail";
-      banner.textContent = `REVIEW REQUIRED: ${risks.join(" | ")}`;
+      banner.textContent = `REVIEW REQUIRED (${verdict}): ${risks.join(" | ")}`;
     }
 
     const checks = activeAudit.checks || {};
@@ -958,11 +1052,14 @@
   }
 
   $("btn-run-passport").addEventListener("click", async () => {
+    if (!state.data?.ready) return;
+    const targetJobId = state.data.job_id;
     const btn = $("btn-run-passport");
     btn.disabled = true;
     btn.textContent = "Verifying...";
     try {
       const res = await apiFetchJson("/api/passport/run", { method: "POST" });
+      if (state.data?.job_id !== targetJobId) return;
       state.data.passport_status = "verified";
       state.data.passport = res.passport;
       state.data.corrupted_passport = null;
@@ -979,30 +1076,43 @@
   });
 
   $("btn-corrupt-demo").addEventListener("click", async () => {
+    if (!state.data?.ready) return;
+    const targetJobId = state.data.job_id;
+    const btn = $("btn-corrupt-demo");
+    btn.disabled = true;
     try {
       setStatus("Testing Defect Detection...", "status-warn");
       const res = await apiFetchJson("/api/passport/corrupt", { method: "POST" });
+      if (state.data?.job_id !== targetJobId) return;
       state.data.corrupted_passport = res.corrupted_passport;
       if (res.verification_history) state.data.verification_history = res.verification_history;
       renderPassport(state.data);
       setStatus("Defect Caught!", "status-fail");
     } catch (err) {
       alert(err.message);
+    } finally {
+      btn.disabled = false;
     }
   });
 
   $("btn-repair-demo").addEventListener("click", async () => {
+    if (!state.data?.ready) return;
+    const targetJobId = state.data.job_id;
+    const btn = $("btn-repair-demo");
+    btn.disabled = true;
     try {
       setStatus("Repairing Release...", "status-warn");
       const res = await apiFetchJson("/api/passport/repair", { method: "POST" });
-      state.data.corrupted_passport = null;
-      state.data.passport = res.passport;
-      state.data.passport_status = "verified";
-      if (res.verification_history) state.data.verification_history = res.verification_history;
-      renderPassport(state.data);
-      setStatus("Verified PASS", "status-ok");
+      if (state.data?.job_id !== targetJobId) return;
+      state.diffCache.clear();
+      await loadState();
+      if (state.activeView === "passport" && state.data) {
+        renderPassport(state.data);
+      }
     } catch (err) {
       alert(err.message);
+    } finally {
+      btn.disabled = false;
     }
   });
 
@@ -1010,11 +1120,12 @@
     const data = await apiFetchJson("/api/state");
     renderAll(data);
     // Automatically resume an in-flight job if page reloaded during execution
-    if (data.active_job_id) {
+    const runJid = data.running_job_id || data.active_job_id;
+    if (runJid) {
       try {
-        const st = await apiFetchJson(`/api/status/${encodeURIComponent(data.active_job_id)}`);
-        if (["queued", "running", "validating"].includes(st.status)) {
-          pollJob(data.active_job_id, $("runner-log"));
+        const st = await apiFetchJson(`/api/status/${encodeURIComponent(runJid)}`);
+        if (["uploading", "queued", "running", "validating"].includes(st.status)) {
+          pollJob(runJid, $("runner-log"));
         }
       } catch {
         // ignore
