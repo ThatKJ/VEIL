@@ -1020,6 +1020,7 @@ _DATELIKE = re.compile(r"(?:19|20)\d{2}(?:[_\-.]\d{1,2}){0,2}|\d{1,2}[_\-.]\d{1,
 
 def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
     stem, ext = os.path.splitext(comp)
+    orig_stem = stem
     flagged = False
 
     def cluster(m):
@@ -1030,7 +1031,20 @@ def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
             return ""
         return c
     stem = re.sub(r"\d+(?:[_\-.\s]\d+)+", cluster, stem)
-    parts = re.split(r"([_\-\s.()]+)", stem)
+    # Strip full multi-separator names and structured/digit IDs BEFORE token splitting so
+    # hyphenated MRNs (e.g. R-2024-A-5670) or CamelCase names (MaheeAwasthi) never survive.
+    for rx in (sw.rx_lat_full, sw.rx_dev_full, sw.rx_ids, sw.rx_digits):
+        s2 = rx.sub("", stem)
+        if s2 != stem:
+            flagged = True
+            stem = s2
+    s2 = RX_IDTOK.sub(lambda m: "" if id_digits_ok(m.group(0)) else m.group(0), stem)
+    if s2 != stem:
+        flagged = True
+        stem = s2
+    # Split CamelCase runs (except common uppercase abbreviations >=2 chars followed by lowercase)
+    camel_split = re.sub(r"([a-z])([A-Z])", r"\1_\2", stem)
+    parts = re.split(r"([_\-\s.()]+)", camel_split)
     keep = []
     for p in parts:
         pl = p.lower()
@@ -1052,13 +1066,10 @@ def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
             flagged = True
             keep = [p for p in keep if p not in (a, b)]
     if not flagged:
-        # whole-stem checks (full names spanning separators)
-        if sw.rx_lat_full.search(stem) or sw.rx_dev_full.search(stem) or sw.rx_ids.search(stem):
-            flagged = True
-            keep = [re.sub(r"[^A-Za-z_]", "", stem.split("_")[0]) or "file"]
-        else:
-            return comp
+        return comp
     base = re.sub(r"[_\-\s.()]{2,}", "_", "".join(keep)).strip("_-. ") or "file"
+    if not base and orig_stem:
+        base = "file"
     return f"{base}_{opaque('fname', salt, 6)}{ext}"
 
 

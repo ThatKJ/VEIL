@@ -408,6 +408,26 @@ class RegressionTests(unittest.TestCase):
             wa_out = (out / "sanitized" / "whatsapp.txt").read_text(encoding="utf-8")
             self.assertIn("Dawa di", wa_out)
 
+    def test_phase9_hyphenated_mrn_and_camelcase_filename_hygiene(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "DS-UPADHYAY-reema-R-2024-A-5670.txt").write_text(
+                "Patient Name: Reema Upadhyay\nMRN: R/2024/A/5670\nDx: Typhoid fever\n", encoding="utf-8"
+            )
+            (inp / "MaheeAwasthi_CBC_17Mar.json").write_text(json.dumps({
+                "patient": {"name": "Mahee Awasthi", "mrn": "KMC:2024:01112"},
+                "results": [{"test": "Hb", "result": "11.5", "unit": "g/dL"}],
+            }), encoding="utf-8")
+            self._run_cli(inp, out, secret="sec-fname-hygiene")
+            rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
+            outs = [f["output"] for f in rep["files"] if f["status"] == "sanitized"]
+            self.assertEqual(len(outs), 2)
+            joined = "\n".join(outs) + "\n" + (out / "records.jsonl").read_text(encoding="utf-8")
+            for leaked in ("UPADHYAY", "Upadhyay", "reema", "5670", "R-2024-A", "Mahee", "Awasthi"):
+                self.assertNotIn(leaked, joined)
+
 
 if __name__ == "__main__":
     unittest.main()
