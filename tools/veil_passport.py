@@ -758,7 +758,7 @@ def render_html(R: dict, metrics: dict | None) -> str:
             "local attacker: targeted A5 (vs raw)": p.get("components_relative_to_raw", {}).get("A5_targeted"),
         }))
     return f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VEIL Privacy Passport 2.0</title>
+<title>VEIL Privacy Passport 3.0 — Team The Aevos</title>
 <style>
 :root{{--bg:#070b12;--fg:#e6edf7;--mut:#92a4bf;--line:#1e2d45;--warn:#f59e0b;--ok:#10b981}}
 body{{background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:920px;margin:32px auto;padding:0 18px}}
@@ -766,7 +766,7 @@ h1{{font-size:25px;margin:0;color:#34d399}} h2{{font-size:16.5px;margin:24px 0 8
 table{{border-collapse:collapse;width:100%}} th,td{{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}}
 th{{color:var(--mut);font-weight:500;width:45%}} ul{{padding-left:20px}} .note{{color:var(--mut);font-size:13px}}
 </style>
-<h1>VEIL Privacy Passport 2.0</h1><div class="sub">Hide the identity. Preserve the medicine. · Truth-free verification by tools/veil_passport.py</div>
+<h1>VEIL Privacy Passport 3.0</h1><div class="sub">Team The Aevos · Hide the identity. Preserve the medicine. · Truth-free verification by tools/veil_passport.py</div>
 {''.join(f'<h2>{html.escape(t)}</h2>' + table(d) for t, d in sec)}
 <h2>Residual risks &amp; verification alerts</h2><ul>{risks}</ul>
 {dev}

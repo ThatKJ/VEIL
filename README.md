@@ -1,6 +1,8 @@
-# VEIL (`rakshak`): a multilingual, longitudinal privacy firewall for hospital records
+# VEIL (`rakshak` package): Verifiable Entity Integrity Layer
 
-**Hide the identity. Preserve the medicine.** VEIL (`rakshak`) sanitises messy multi-hospital exports in English, Hindi (Devanagari), Hinglish, and Nagari/Eastern/Western Indic scripts (CSV/TSV, nested JSON, arrays-of-arrays, JSON Lines, FHIR R4 Bundles, fixed-width `.txt`, free-text notes, broken files). It works **offline, on CPU only, with no LLMs or ML models**, using only the Python standard library. In one release it:
+**Team:** **The Aevos** · **Track:** Track 3 — Secret Wards · **Repository:** https://github.com/ThatKJ/VEIL
+
+**Hide the identity. Preserve the medicine.** VEIL (internal Python package `rakshak`) sanitises messy multi-hospital exports in English, Hindi (Devanagari), Hinglish, and Nagari/Eastern/Western Indic scripts (CSV/TSV, nested JSON, arrays-of-arrays, JSON Lines, FHIR R4 Bundles, fixed-width `.txt`, free-text notes, broken files). It works **offline, on CPU only, with no LLMs or ML models**, using only the Python standard library. In one release it:
 
 * removes personal data everywhere: content, JSON keys, CSV headers, filenames (including CamelCase & hyphenated MRNs), URLs, metadata, base64/hex/HTML-encoded payloads;
 * keeps medicines, doses (`1-0-1`, `q8h`), vitals, lab values, diagnoses (ICD-10), doctors (`Dr.`), and exact hospital-stay lengths (LOS) intact;
@@ -78,7 +80,7 @@ Local re-implementation of the published scorer and attacker (`docs/SCORING.md`,
   * Scalar-first singleton compression + lazy token indexing in `Linker.run()` and streaming chunk release reduced peak RSS across every cardinality tier:
     * `100k_repeat_500p`: `10.38s`, `461.2 MB` RSS; `100k_unique`: `12.38s`, **`516.9 MB`** RSS (`-98.5 MB` vs `kg9`); `100k_homonym_hh`: `10.66s`, **`443.2 MB`** RSS; `100k_mixed` (`502` files): `19.49s`, `332.2 MB` RSS.
     * `250k_mixed_50kp` (`1,252` files): `53.74s`, **`732.6 MB`** RSS (`-27.9 MB` vs `kg9`); `500k_repeat_50kp`: `55.59s`, **`1,766.6 MB`** RSS (`-208.7 MB` vs `kg9`); `500k_unique`: `63.42s`, `2,095.3 MB` RSS.
-    * `1M_repeat_100kp`: `113.16s`, **`3,206.6 MB`** RSS (`-143.7 MB` vs `kg9`); `1M_unique` (`1,000,000` distinct pseudonyms, `0` collisions): **`128.93s`**, **`3,176.2 MB`** RSS (`7,756.3 rows/s`, `valid: true`, `-102.2 MB` & `-10.2s` vs `kg9`).
+    * `1M_repeat_100kp`: `113.16s`, **`3,206.6 MB`** RSS (`-143.7 MB` vs `kg9`); `1M_unique` (`1,000,000` distinct pseudonyms, `0` collisions): **`128.93s`**, **`3,176.2 MB`** RSS (`7,756.3 rows/s`, `valid: true`, `-102.2 MB` & `-10.2s` vs `kg9`); `1.25M_mixed_250kp` (`6,252` files, `943,750` output records): **`682.76s` / `2,928.4 MB`** RSS (`valid: true`).
 
 ## Release Assurance 3.0 & Clinical Privacy Command Center (Dev/Demo Tools — Not Runtime)
 
@@ -87,11 +89,19 @@ Local re-implementation of the published scorer and attacker (`docs/SCORING.md`,
   ./launch_veil.sh          # or: python3 tools/veil_ui.py --demo --open
   ```
 * **VEIL Assurance Engine 3.0 (`tools/veil_passport.py`):** Zero-ground-truth release verification with overall `verdict` (`PASS` / `FAIL` / `WARNING` / `SKIPPED`), institutional vs patient role discrimination (separating FHIR `Organization`/`hospital` entities while still failing if direct PII co-occurs on the same line), exact `loc/out` record-level & cross-record per-patient temporal chronology (`dev` official practice: **`privacy 197/197 PASS`**, **`clinical 2361/2361 PASS`**, **`temporal 724/724 PASS`**, **`cross_record 48/48`**, **`identity 774/774 PASS`**, **`structural 200/200 PASS`**), occurrence-aware clinical checks, and decoded Base64/Hex/`\uXXXX`/URL residue sweeps.
-* **Adversarial Mutation Lab (`tools/mutation_lab.py`):** Runs controlled defect-injection & privacy-mutation invariants verifying fail-closed detection and zero false merges (`38/38` unit tests + `180/180` Hypothesis fuzzing properties passing).
+* **Adversarial Mutation Lab (`tools/mutation_lab.py`):** Runs controlled defect-injection & privacy-mutation invariants verifying fail-closed detection and zero false merges (`39/39` unit tests + `180/180` Hypothesis fuzzing properties passing).
+
+## Security & Encryption-at-Rest Design
+
+* **Zero persistent unencrypted intermediates (official CLI runtime):** All Pass 1 records, harvested identity sets, and linkage graphs remain strictly in process RAM only and are freed incrementally between stages (`gc.collect()` decoupling). Neither `main.py` nor `rakshak/` writes raw patient data to `TMPDIR`, `HOME`, or intermediate scratch files.
+* **Atomic sanitized-only disk writes & quarantine containment:** Only redacted/pseudonymized outputs under `sanitized/` (written atomically via per-file `.veil_tmp_* -> os.replace` and unlinked immediately on error), pseudonym/locator mappings (`records.jsonl`), and non-PII `report.json` (SHA-256 accounting) hit disk. Malformed/binary/deep-JSON/symlink-escaping files are quarantined without raw copy.
+* **Separate keyed secrets & fail-closed startup:** `RAKSHA_SECRET` is read solely from the environment (required non-empty at startup; `main.py` exits `2` cleanly if missing/blank), used only in RAM for keyed `HMAC-SHA256` pseudonyms/date shifts/opaque renames (distinct from encryption), and never written to outputs, logs, or errors.
+* **Dev/Demo Command Center upload hygiene (`tools/veil_ui.py`):** Uploaded synthetic bundles are held only ephemerally during execution and wiped immediately (`shutil.rmtree`) from temp staging once sanitized payloads are built, with `atexit` cleanup on server shutdown; inputs supplied via `--input` are never modified.
+* **Honest limitation:** VEIL assumes trusted process RAM during active computation on the isolated sandbox host and relies on OS/volume encryption at rest for archived sanitized exports where required by deployment policy.
 
 ## License & Models
 
-Licensed under the **MIT License** ([LICENSE](LICENSE)). **Models:** None — zero LLMs, zero transformers, zero pretrained weights, zero network calls.
+Licensed under the **MIT License** ([LICENSE](LICENSE), Copyright © 2026 **The Aevos**). **Models:** None — zero LLMs, zero transformers, zero pretrained weights, zero network calls.
 
 ## Known limitations
 
@@ -99,4 +109,4 @@ Licensed under the **MIT License** ([LICENSE](LICENSE)). **Models:** None — ze
 * **Passport scope:** Absence of regex residue is not proof of anonymity, and sampled clinical regex expressions kept does not equal ground-truth `medical_kept`.
 * **Name linking on unsupported scripts & multi-row blocks:** While 9 Indic digit systems and 10 writing scripts (`Latin`, `Devanagari`, `Bengali/Assamese`, `Gurmukhi`, `Gujarati`, `Odia`, `Tamil`, `Telugu`, `Kannada`, `Malayalam`) are normalized/transliterated, unknown scripts abstain safely to avoid false merges; multi-row stacked CSV blocks retain exact row indices relative to `rows[0]`.
 * **Coincidental numeric substrings & `A5` risk:** Valid clinical numbers/shifted timestamps can match 4–5 digit MRN substrings locally; preserving diagnoses and LOS keeps unique-condition `A5` non-zero.
-* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`38/38` unit/security/contract/Assurance 3.0/Mutation/UI tests pass), Hypothesis fuzzing (`180/180` dev property checks), and `check_submission.py --run` (`READY TO SUBMIT`); local Docker daemon was inactive.
+* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`39/39` unit/security/contract/Assurance 3.0/Mutation/UI tests pass), Hypothesis fuzzing (`180/180` dev property checks), and `check_submission.py --run` (`READY TO SUBMIT`); local Docker daemon was inactive.

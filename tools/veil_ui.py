@@ -61,32 +61,33 @@ EXACT_PIN_PATTERN = re.compile(r"(?<!\d)[1-8]\d{5}(?!\s*/\s*cumm|\d)")
 AGE_BAND_PATTERN = re.compile(r"\b\d{1,2}-\d{2,3}\b")
 
 HISTORICAL_BENCHMARKS = {
-    "checkpoint": "TITAN (main, built on frozen known-good-8)",
+    "team": "The Aevos",
+    "checkpoint": "CHAMPION (main, built on frozen known-good-11 / 69530e8)",
     "disclaimer": (
         "Measured offline using the local synthetic harness and re-implemented attacker "
         "(NOT official competition evaluation; H20/H21/H2/s9_C are reclassified diagnostic datasets)."
     ),
     "runs": [
-        {"dataset": "dev", "type": "Official Practice", "score": "82.34 (92.34 w/ perf)", "leak_pct": "0.22% (check_dev 0.0%)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_dev", "type": "Dev Synthetic", "score": "81.14 (91.14 w/ perf)", "leak_pct": "0.06% (truth)", "false_merges": 0, "canaries": "0/3"},
-        {"dataset": "chaos_holdout2", "type": "Diag (was 11 FM)", "score": "85.14 (95.14 w/ perf)", "leak_pct": "0.02% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_holdout15..19", "type": "Diag Suite (5x, kg8)", "score": "85.25 - 92.94 (w/ perf)", "leak_pct": "0.01% - 0.65%", "false_merges": 0, "canaries": "0/20"},
-        {"dataset": "chaos_holdout20", "type": "Diag Haryana/EAV", "score": "76.51 (86.51 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_holdout21", "type": "Diag Kerala/Malayalam", "score": "81.07 (91.07 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_A_awadh", "type": "Section 9 Ref", "score": "79.05 (89.05 w/ perf)", "leak_pct": "0.74% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_B_unfamiliar", "type": "Section 9 Ref", "score": "79.20 (89.20 w/ perf)", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "s9_C_ambiguous", "type": "Section 9 Diag", "score": "50.10 (60.10 w/ perf)*", "leak_pct": "0.00% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "dev", "type": "Official Practice", "score": "92.31 (local w/ perf)", "leak_pct": "0.0% (check_dev 0/3230)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_dev", "type": "Dev Synthetic", "score": "93.01 (local w/ perf)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/3"},
+        {"dataset": "chaos_holdout2", "type": "Diag (FM 11 -> 0)", "score": "95.20 (local w/ perf)", "leak_pct": "0.1% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout18", "type": "Diag Assam/Odisha", "score": "87.22 (+0.77 vs kg9)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout19", "type": "Diag Karnataka+JSONL", "score": "93.54 (+1.18 vs kg9)", "leak_pct": "0.7% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout20", "type": "Diag Haryana/EAV", "score": "86.07 (local w/ perf)", "leak_pct": "0.1% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout21", "type": "Diag Kerala/Malayalam", "score": "89.20 (local w/ perf)", "leak_pct": "0.2% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "4_blind_suites", "type": "Frozen Unseen (9601..9604)", "score": "89.96 mean (min 84.23)", "leak_pct": "0.01% - 0.11%", "false_merges": 0, "canaries": "0/16"},
     ],
     "scalability": [
-        {"workload": "100k repeat (500p)", "records": "100,000", "wall_s": 10.271, "peak_rss_mb": 472.6, "throughput": "9,736 rows/s"},
-        {"workload": "100k unique (100kp)", "records": "100,000", "wall_s": 13.062, "peak_rss_mb": 615.4, "throughput": "7,656 rows/s"},
-        {"workload": "250k mixed (1,252 files)", "records": "188,750", "wall_s": 53.341, "peak_rss_mb": 760.5, "throughput": "3,539 rows/s"},
-        {"workload": "500k repeat (50kp)", "records": "500,000", "wall_s": 56.183, "peak_rss_mb": 1975.3, "throughput": "8,900 rows/s"},
-        {"workload": "1M repeat (100kp)", "records": "1,000,000", "wall_s": 113.659, "peak_rss_mb": 3350.3, "throughput": "8,798 rows/s"},
-        {"workload": "1M unique (1M pts)", "records": "1,000,000", "wall_s": 139.136, "peak_rss_mb": 3278.4, "throughput": "7,187 rows/s"},
+        {"workload": "100k repeat (500p)", "records": "100,000", "wall_s": 10.384, "peak_rss_mb": 461.2, "throughput": "9,630 rows/s"},
+        {"workload": "100k unique (100kp)", "records": "100,000", "wall_s": 12.378, "peak_rss_mb": 516.9, "throughput": "8,079 rows/s"},
+        {"workload": "250k mixed (1,252 files)", "records": "188,750", "wall_s": 53.738, "peak_rss_mb": 732.6, "throughput": "3,512 rows/s"},
+        {"workload": "500k repeat (50kp)", "records": "500,000", "wall_s": 55.589, "peak_rss_mb": 1766.6, "throughput": "8,995 rows/s"},
+        {"workload": "1M repeat (100kp)", "records": "1,000,000", "wall_s": 113.157, "peak_rss_mb": 3206.6, "throughput": "8,837 rows/s"},
+        {"workload": "1M unique (1M pts)", "records": "1,000,000", "wall_s": 128.927, "peak_rss_mb": 3176.2, "throughput": "7,756 rows/s"},
+        {"workload": "1.25M mixed (6,252 files)", "records": "943,750", "wall_s": 682.755, "peak_rss_mb": 2928.4, "throughput": "1,382 rows/s"},
     ],
-    "scale": {"records": "1,000,000 x 1,000,000", "seconds": 139.136, "peak_rss_mb": 3278.4},
-    "checks": {"unit_tests": "36/36 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
+    "scale": {"records": "1,000,000 x 1,000,000", "seconds": 128.927, "peak_rss_mb": 3176.2},
+    "checks": {"unit_tests": "39/39 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
 }
 
 
@@ -97,6 +98,7 @@ class ServerState:
         self.jobs: dict[str, dict] = {}
         self.active: dict | None = None
         self.active_inp: Path | None = None
+        self.active_upload_bytes: dict[str, bytes] | None = None
         self.active_out: Path | None = None
         self.active_secret: str = "veil-command-center-demo-key"
         self.active_policy_mode: str = "adaptive"
@@ -762,7 +764,7 @@ def _build_full_payload(
         "verification_history": [
             {
                 "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%H:%M:%S UTC"),
-                "event": "Initial Assurance 2.0 Audit",
+                "event": "Initial Assurance 3.0 Audit",
                 "status": "PASS" if not passport["residual_risks"] else "FAIL",
                 "summary": f"{passport['identity']['pseudonym_present_in_exact_record']} exact records · {passport['clinical']['occurrence_totals']} clinical · 0 residual hits"
                 if not passport["residual_risks"]
@@ -780,10 +782,11 @@ def _build_full_payload(
     }
 
 
-def _stage_uploaded_files(files: list[dict], dest: Path) -> None:
+def _stage_uploaded_files(files: list[dict], dest: Path) -> dict[str, bytes]:
     if not files or len(files) > MAX_UPLOAD_FILES:
         raise ValueError(f"Expected 1 to {MAX_UPLOAD_FILES} files")
     total_bytes = 0
+    mem_files: dict[str, bytes] = {}
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -807,6 +810,16 @@ def _stage_uploaded_files(files: list[dict], dest: Path) -> None:
             raise ValueError("Unsafe upload path")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(raw)
+        mem_files[rel] = raw
+    return mem_files
+
+
+def _materialize_mem_files(mem_files: dict[str, bytes], dest: Path) -> None:
+    for rel, raw in mem_files.items():
+        target = (dest / rel).resolve()
+        if target.is_relative_to(dest.resolve()):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
 
 
 def _create_zip_bytes(out: Path) -> bytes:
@@ -979,6 +992,7 @@ def make_handler(state: ServerState):
                 out_dir = run_dir / "output"
                 arena_dir = run_dir / "arena"
 
+                upload_mem: dict[str, bytes] | None = None
                 try:
                     if mode == "demo":
                         if not DEMO_DIR.is_dir():
@@ -986,7 +1000,7 @@ def make_handler(state: ServerState):
                         shutil.copytree(DEMO_DIR, inp_dir)
                         label = str(req.get("label") or "Synthetic Multi-Hospital Bundle (demo/sample_hospital)")
                     elif mode == "upload":
-                        _stage_uploaded_files(req.get("files", []), inp_dir)
+                        upload_mem = _stage_uploaded_files(req.get("files", []), inp_dir)
                         label = str(req.get("label") or "Uploaded Synthetic Hospital Dataset")
                     else:
                         raise ValueError("mode must be 'demo' or 'upload'")
@@ -1016,7 +1030,8 @@ def make_handler(state: ServerState):
                         )
                         with state.lock:
                             state.active = payload
-                            state.active_inp = inp_dir
+                            state.active_inp = inp_dir if mode == "demo" else None
+                            state.active_upload_bytes = upload_mem
                             state.active_out = out_dir
                             state.active_secret = secret
                             state.active_policy_mode = policy_mode
@@ -1027,6 +1042,11 @@ def make_handler(state: ServerState):
                         with state.lock:
                             state.jobs[job_id]["status"] = "failed"
                             state.jobs[job_id]["error"] = str(exc)
+                    finally:
+                        if mode == "upload" and inp_dir.exists():
+                            shutil.rmtree(inp_dir, ignore_errors=True)
+                        if arena_dir.exists():
+                            shutil.rmtree(arena_dir, ignore_errors=True)
 
                 if req.get("sync"):
                     worker()
@@ -1039,10 +1059,11 @@ def make_handler(state: ServerState):
 
             if path == "/api/passport/corrupt":
                 with state.lock:
-                    if not state.active_inp or not state.active_out or not state.active:
+                    if (not state.active_inp and not state.active_upload_bytes) or not state.active_out or not state.active:
                         self._send_json(400, {"error": "Run VEIL first before testing defect detection"})
                         return
                     inp = state.active_inp
+                    upload_mem = state.active_upload_bytes
                     out = state.active_out
                     bad_dir = out.parent / "output_corrupted"
                     if bad_dir.exists():
@@ -1059,7 +1080,13 @@ def make_handler(state: ServerState):
                         orig_t = target.read_text(encoding="utf-8", errors="replace")
                         mut_t = re.sub(r"(\d+)\s*mg", lambda m: f"{int(m.group(1)) + 50} mg", orig_t, count=1)
                         target.write_text(mut_t + "\nCall 9876501234\n", encoding="utf-8")
-                    R_bad = VP.audit(inp, bad_dir)
+                    if inp is not None:
+                        R_bad = VP.audit(inp, bad_dir)
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
+                            tp = Path(td)
+                            _materialize_mem_files(upload_mem or {}, tp)
+                            R_bad = VP.audit(tp, bad_dir)
                     bad_html = VP.render_html(R_bad, None)
                     state.active["corrupted_passport"] = {
                         "target_file": target.relative_to(bad_dir).as_posix(),
@@ -1086,15 +1113,23 @@ def make_handler(state: ServerState):
 
             if path == "/api/passport/repair":
                 with state.lock:
-                    if not state.active_inp or not state.active_out or not state.active:
+                    if (not state.active_inp and not state.active_upload_bytes) or not state.active_out or not state.active:
                         self._send_json(400, {"error": "No active run to repair"})
                         return
                     inp = state.active_inp
+                    upload_mem = state.active_upload_bytes
                     out = state.active_out
                     secret = state.active_secret
                     policy_mode = state.active_policy_mode
-                    runtime_s, _ = _run_subprocess_engine(inp, out, secret, policy_mode)
-                    R_ok = VP.audit(inp, out)
+                    if inp is not None:
+                        runtime_s, _ = _run_subprocess_engine(inp, out, secret, policy_mode)
+                        R_ok = VP.audit(inp, out)
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="veil_ui_ephem_") as td:
+                            tp = Path(td)
+                            _materialize_mem_files(upload_mem or {}, tp)
+                            runtime_s, _ = _run_subprocess_engine(tp, out, secret, policy_mode)
+                            R_ok = VP.audit(tp, out)
                     state.active["passport"] = R_ok
                     state.active["passport_html"] = VP.render_html(R_ok, None)
                     state.active["corrupted_passport"] = None

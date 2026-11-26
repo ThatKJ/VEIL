@@ -1,4 +1,4 @@
 [submission]
-name  = "rakshak"                                              # TODO: replace with the registered team name
+name  = "The Aevos"
 setup = "pip install -r requirements.txt"                      # nothing to install: standard library only
 run   = "python3 main.py --input {input} --output {output}"     # offline, CPU-only

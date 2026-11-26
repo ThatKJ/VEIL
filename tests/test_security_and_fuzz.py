@@ -153,6 +153,25 @@ class SecurityAndFuzzTests(unittest.TestCase):
             self.assertNotIn("OFFLINE_NETWORK_VIOLATION", res.stderr)
             self.assertNotIn("Devendra", (out / "sanitized" / "note.txt").read_text(encoding="utf-8"))
 
+    def test_missing_or_empty_raksha_secret_fails_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            inp, out = t / "in", t / "out"
+            inp.mkdir()
+            (inp / "note.txt").write_text("Patient: Devendra Singh\nMRN: DS-101\n", encoding="utf-8")
+            for bad_env in (
+                {k: v for k, v in os.environ.items() if k != "RAKSHA_SECRET"},
+                {**os.environ, "RAKSHA_SECRET": ""},
+                {**os.environ, "RAKSHA_SECRET": "   "},
+            ):
+                res = subprocess.run(
+                    [sys.executable, str(ROOT / "main.py"), "--input", str(inp), "--output", str(out)],
+                    cwd=str(ROOT), env=bad_env, capture_output=True, text=True,
+                )
+                self.assertNotEqual(res.returncode, 0)
+                self.assertIn("RAKSHA_SECRET", res.stderr)
+                self.assertFalse((out / "report.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
