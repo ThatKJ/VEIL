@@ -71,14 +71,18 @@ Local re-implementation of the published scorer and attacker (`docs/SCORING.md`,
 * **7-set (`dev`, `chaos_dev`, `H15..H19`) & `H1..H5` notes:** Zero false merges across `dev`, `chaos_dev`, `H1`, `H3..H5`, `H15..H21`, `S9_A..C`, and `W1..W5` (`11` false-merge pairs observed on `chaos_holdout2` at `est_total 95.08`). `A7 = 0.000` on `dev`.
 * **High-cardinality scaling (`scale_cardinality.py`, 2 CPUs):** `100,000 rows x 100,000 unique patients` in **`13.95s`** (`707.5 MB` peak RSS, `0` quarantined); `2,000` small files in **`1.44s`**. Worst-case linkage suite (`linkage_worstcase.py`, `W1..W5`): `0` false merges in `0.015–0.286s`.
 
-## Release Assurance & Demo (Dev/Demo Tools — Not Runtime)
+## Release Assurance & Clinical Privacy Command Center (Dev/Demo Tools — Not Runtime)
 
+* **One-command interactive dashboard (`launch_veil.sh` / `tools/veil_ui.py`):** Launches the offline **VEIL — Clinical Privacy Command Center** (`127.0.0.1:8765`, pure Python stdlib + zero external web frameworks/CDNs) pre-loaded on the bundled `demo/sample_hospital/` dataset (`SH-25-1001`..`SH-25-1005` across super-aligned TSV, EAV CSV, Devanagari coded JSON, EN/HI clinical note, HL7 v2 `ADT^A04`, clean fever protocol, and fail-closed `scans/corrupt_scan.bin` binary quarantine). Supports synthetic dataset drag-and-drop upload, live execution progress, before-and-after record diffs, cross-hospital SVG patient identity graph & cannot-link veto decisions, 3-policy Privacy Arena, temporal LOS verification, live defect injection/repair via Privacy Passport, and sanitized ZIP export:
+  ```bash
+  ./launch_veil.sh          # or: python3 tools/veil_ui.py --demo --open
+  ```
 * **`tools/veil_passport.py`** runs a truth-free audit across four independent checks (`structural` pairing all physical files 1:1 with SHA-256 report entries, independent `privacy` residue including base64, `clinical` sampled expressions/intervals, and `identity` pseudonym placement). On official `dev`, the Passport measured **`200/200`** physical input files accounted (`199` unique SHA-256s), `194` exported, `6` quarantined, **`0` residual pattern hits** across `197` channels, **`100.0%` protected clinical expressions** (`1637/1637`, intervals `24/24`), and **`774/774` pseudonyms placed**.
 * **`tools/veil_demo.py`** runs the live engine + local attacker end-to-end on synthetic `chaos_dev` (fragmented patient `PT00005`, `21/21` records linked to `PSN-81FAPE`, homonyms separated `PSN-YRWD2D` vs `PSN-YWXMP4`, `107/109` clinical values kept, `A4` reduced `1.00 -> 0.23` vs direct masking, plus injected defect caught by Passport and repaired to `416/416` placed).
 
-## Models
+## License & Models
 
-None. Zero LLMs, zero transformers, zero pretrained weights, zero network calls.
+Licensed under the **MIT License** ([LICENSE](LICENSE)). **Models:** None — zero LLMs, zero transformers, zero pretrained weights, zero network calls.
 
 ## Known limitations
 
@@ -86,4 +90,4 @@ None. Zero LLMs, zero transformers, zero pretrained weights, zero network calls.
 * **Passport scope:** Absence of regex residue is not proof of anonymity, and sampled clinical regex expressions kept does not equal ground-truth `medical_kept`.
 * **Name linking on unsupported scripts & multi-row blocks:** While 8 Indic digit systems are scrubbed cleanly, name transliteration covers Devanagari/Bengali/Gurmukhi/Gujarati natively and abstains safely on unknown scripts to avoid false merges; multi-row stacked CSV blocks retain exact row indices relative to `rows[0]`.
 * **Coincidental numeric substrings & `A5` risk:** Valid clinical numbers/shifted timestamps can match 4–5 digit MRN substrings locally; preserving diagnoses and LOS keeps unique-condition `A5` non-zero.
-* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`31/31` unit/security/contract/Passport tests pass); local Docker daemon was inactive.
+* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`33/33` unit/security/contract/Passport/UI tests pass); local Docker daemon was inactive.

@@ -1,0 +1,7 @@
+STANDARD CLINICAL PROTOCOL - ACUTE FEBRILE ILLNESS (CLEAN REFERENCE)
+No patient identifiers in this clinical protocol.
+Assess vitals: BP 120/80 mmHg, Temperature 101.4 F, SpO2 97 %.
+First-line antipyretic: Tab. Paracetamol 500 mg 1-0-1 x 3 days.
+Hydration: ORS 200 ml after every loose stool.
+Investigations: CBC, Platelet count 210000 /cumm, Serum Creatinine 0.9 mg/dL, HbA1c 5.6 %.
+Follow ICD-10 R50.9 escalation if fever persists > 72 hours.

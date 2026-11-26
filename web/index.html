@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VEIL — Clinical Privacy Command Center</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36" fill="none">
+            <path d="M18 3L5 8.5V17.5C5 25.3 10.6 31.8 18 33.5C25.4 31.8 31 25.3 31 17.5V8.5L18 3Z" stroke="#10b981" stroke-width="2.2" fill="#0d2220"/>
+            <path d="M12.5 18.2L16.3 22L23.8 13.8" stroke="#34d399" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">VEIL</div>
+          <div class="brand-sub">Clinical Privacy Command Center</div>
+        </div>
+      </div>
+
+      <div class="tagline-pill">Hide the identity. Preserve the medicine.</div>
+
+      <nav class="nav-list" aria-label="Command Center Sections">
+        <button class="nav-item active" data-view="overview">
+          <span class="nav-dot"></span>Command Overview
+        </button>
+        <button class="nav-item" data-view="runner">
+          <span class="nav-dot"></span>Upload &amp; Engine Run
+        </button>
+        <button class="nav-item" data-view="inspector">
+          <span class="nav-dot"></span>Before &amp; After Diff
+        </button>
+        <button class="nav-item" data-view="graph">
+          <span class="nav-dot"></span>Identity Graph &amp; Vetoes
+        </button>
+        <button class="nav-item" data-view="arena">
+          <span class="nav-dot"></span>Privacy Arena
+        </button>
+        <button class="nav-item" data-view="clinical">
+          <span class="nav-dot"></span>Clinical &amp; Temporal
+        </button>
+        <button class="nav-item" data-view="passport">
+          <span class="nav-dot"></span>Privacy Passport &amp; Export
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="meta-row"><span>Engine Mode</span><span class="badge badge-ok">Stdlib Offline</span></div>
+        <div class="meta-row"><span>Frozen Core</span><span class="mono muted">known-good-8</span></div>
+        <div class="meta-row"><span>Network Calls</span><span class="mono muted">0 External</span></div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">ACTIVE RELEASE WORKSPACE</div>
+          <h1 id="active-dataset-title" class="page-title">Loading VEIL engine state...</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="status-pill" class="status-pill status-idle">Ready</span>
+          <button id="btn-quick-demo" class="btn btn-primary">Re-run Demo Bundle</button>
+          <a id="btn-download-zip" href="/api/download/zip" class="btn btn-emerald">Download Sanitized ZIP</a>
+        </div>
+      </header>
+
+      <!-- Live Progress Banner -->
+      <section id="progress-panel" class="progress-panel hidden" aria-live="polite">
+        <div class="progress-head">
+          <span id="progress-stage">Executing pipeline...</span>
+          <span id="progress-pct" class="mono">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+        </div>
+      </section>
+
+      <!-- VIEW 1: OVERVIEW -->
+      <section id="view-overview" class="view active">
+        <div class="kpi-grid" id="overview-kpis"></div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-head">
+              <h2>Active Run Telemetry &amp; Assurance</h2>
+              <span class="badge badge-emerald" id="ov-runtime-badge">--</span>
+            </div>
+            <div id="ov-telemetry-table"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>PII Detection &amp; Transformation Breakdown</h2>
+              <span class="badge badge-slate" id="ov-id-total">--</span>
+            </div>
+            <div id="ov-transform-bars" class="bar-list"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Verified Checkpoint Benchmarks (Local Synthetic Harness)</h2>
+              <p class="card-sub" id="hist-disclaimer"></p>
+            </div>
+            <span class="badge badge-ok" id="hist-checkpoint">known-good-8</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="hist-table"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 2: UPLOAD & RUNNER -->
+      <section id="view-runner" class="view">
+        <div class="two-col">
+          <div class="card">
+            <div class="card-head">
+              <h2>Ingest Synthetic Hospital Dataset</h2>
+              <span class="badge badge-ok">Local Processing Only</span>
+            </div>
+            <p class="card-sub">
+              Drop synthetic multi-format files (<code>.csv</code>, <code>.tsv</code>, <code>.json</code>, <code>.jsonl</code>, <code>.txt</code>, HL7 <code>ADT</code>, or binary fixtures to verify fail-closed quarantine) or launch the bundled multilingual multi-hospital scenario.
+            </p>
+            <div id="dropzone" class="dropzone" tabindex="0">
+              <div class="dropzone-title">Drop synthetic hospital files here</div>
+              <div class="dropzone-sub">or click to browse local files (up to 64 files / 16 MB)</div>
+              <input id="file-input" type="file" multiple hidden />
+            </div>
+            <div id="staged-files-list" class="staged-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>Pipeline Configuration &amp; Execution</h2>
+              <span class="badge badge-slate">Zero LLM / Zero Cloud</span>
+            </div>
+            <div class="form-group">
+              <label for="policy-select">Quasi-Identifier Policy Mode</label>
+              <select id="policy-select" class="input-ctrl">
+                <option value="adaptive" selected>VEIL Adaptive Privacy (Default — Pooled k-Risk + Rare Escalation)</option>
+                <option value="fixed">Fixed QI Policy (Uniform 5-year Bands + Shifted Dates)</option>
+                <option value="mask">Direct Masking Only (Baseline Comparison)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="secret-input">Keyed HMAC Pseudonym Secret (<code>RAKSHA_SECRET</code>)</label>
+              <input id="secret-input" type="text" class="input-ctrl mono" value="veil-command-center-demo-key" />
+              <div class="field-hint">Never written to output artifacts; governs salted base32 pseudonyms &amp; date offsets.</div>
+            </div>
+            <div class="btn-row">
+              <button id="btn-run-uploaded" class="btn btn-emerald" disabled>Run VEIL on Uploaded Files</button>
+              <button id="btn-run-demo" class="btn btn-primary">Run Bundled Demo Bundle</button>
+            </div>
+            <div id="runner-log" class="console-box">Engine idle.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: BEFORE & AFTER -->
+      <section id="view-inspector" class="view">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Before &amp; After Channel Inspector</h2>
+              <p class="card-sub">Inspect raw synthetic input vs sanitized output (or fail-closed binary quarantine) alongside redaction tokens and preserved medical facts.</p>
+            </div>
+            <div id="inspector-badges" class="badge-row"></div>
+          </div>
+          <div id="file-tabs" class="file-pill-bar"></div>
+          <div class="diff-grid">
+            <div class="diff-pane">
+              <div class="diff-pane-head">
+                <span>Raw Synthetic Input</span>
+                <span id="diff-in-meta" class="mono muted"></span>
+              </div>
+              <pre id="diff-input-pre" class="code-view"></pre>
+            </div>
+            <div class="diff-pane">
+              <div class="diff-pane-head">
+                <span>VEIL Sanitized Output</span>
+                <span id="diff-out-meta" class="mono muted"></span>
+              </div>
+              <div id="diff-output-pre" class="code-view rich-code"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Active File Redaction &amp; Preservation Summary</h2>
+          </div>
+          <div id="inspector-tag-detail" class="chip-grid"></div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: IDENTITY GRAPH -->
+      <section id="view-graph" class="view">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Cross-Hospital Patient Identity Graph (Zero Raw PII)</h2>
+              <p class="card-sub">
+                Emerald hubs show pseudonyms (<code>PSN-*</code>). Solid links denote verified multi-channel linkage; dashed red arcs show homonyms or shared household IDs separated by hard cannot-link vetoes.
+              </p>
+            </div>
+            <div class="legend-row">
+              <span class="leg"><i class="dot dot-ok"></i>Matched Cluster</span>
+              <span class="leg"><i class="dot dot-veto"></i>Rejected (Cannot-Link Veto)</span>
+              <span class="leg"><i class="dot dot-amb"></i>Ambiguous / Unlinked</span>
+            </div>
+          </div>
+          <div class="graph-shell">
+            <svg id="identity-svg" viewBox="0 0 980 420" role="img" aria-label="Cross-hospital patient identity resolution graph"></svg>
+          </div>
+          <div id="graph-detail-bar" class="detail-strip">Click any patient hub or link edge to inspect linkage signals and veto rationale.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Pairwise Identity Resolution Decisions</h2>
+            <div class="filter-row">
+              <button class="filter-pill active" data-filter="all">All</button>
+              <button class="filter-pill" data-filter="matched">Matched</button>
+              <button class="filter-pill" data-filter="rejected">Rejected Vetoes</button>
+              <button class="filter-pill" data-filter="ambiguous">Ambiguous / Clean</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="decisions-table"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 5: PRIVACY ARENA -->
+      <section id="view-arena" class="view">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Privacy Arena — Empirical Policy Comparison on Active Dataset</h2>
+              <p class="card-sub">
+                Same input dataset executed live under Direct Masking, Fixed QI Policy, and VEIL Adaptive Privacy. Measures real residual identifiers, visible 6-digit PINs, exact age exposure, adaptive escalations, and clinical preservation.
+              </p>
+            </div>
+            <span class="badge badge-emerald">Measured Live</span>
+          </div>
+          <div id="arena-cards" class="arena-grid"></div>
+          <div class="table-wrap" style="margin-top:16px">
+            <table class="data-table" id="arena-table"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 6: CLINICAL & TEMPORAL -->
+      <section id="view-clinical" class="view">
+        <div class="two-col">
+          <div class="card">
+            <div class="card-head">
+              <h2>Temporal Interval &amp; Length-of-Stay Preservation</h2>
+              <span class="badge badge-ok" id="los-badge">--</span>
+            </div>
+            <p class="card-sub">Per-patient HMAC date shifting preserves exact clinical intervals and hospital Length-of-Stay (<code>LOS Delta = 0 days</code>) while obscuring calendar dates.</p>
+            <div id="timeline-cards"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>Attending Clinician &amp; Protected Probes</h2>
+              <span class="badge badge-emerald" id="clin-pct-badge">--</span>
+            </div>
+            <div id="clinical-categories" class="bar-list"></div>
+            <div class="subhead">Preserved Healthcare Personnel (Never Falsely Redacted)</div>
+            <div id="staff-chips" class="chip-grid"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Verified Clinical Values Sample (Input -> Sanitized Output)</h2>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="clinical-samples-table"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 7: PRIVACY PASSPORT -->
+      <section id="view-passport" class="view">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>VEIL Privacy Passport — Independent Release Assurance</h2>
+              <p class="card-sub">
+                Computed blindly on input/output files without ground truth using <code>tools/veil_passport.py</code>. Never writes raw patient identifiers.
+              </p>
+            </div>
+            <div class="btn-row">
+              <button id="btn-corrupt-demo" class="btn btn-amber">Inject Synthetic Defect</button>
+              <button id="btn-repair-demo" class="btn btn-emerald hidden">Re-Run &amp; Repair VEIL</button>
+              <a href="/api/passport/html" class="btn btn-ghost">Export HTML</a>
+              <a href="/api/passport/json" class="btn btn-ghost">Export JSON</a>
+              <a href="/api/download/zip" class="btn btn-primary">Download Release ZIP</a>
+            </div>
+          </div>
+
+          <div id="passport-banner" class="passport-banner ok"></div>
+          <div id="passport-pillars" class="pillar-grid"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

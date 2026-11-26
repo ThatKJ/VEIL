@@ -1,0 +1,16 @@
+DISCHARGE SUMMARY - REGIONAL WARD A
+Patient Name: अर्जुन वर्मा (Arjun Verma)
+UHID: SH-25-1001    Age/Sex: 46 Yrs / M
+Attendant: S/O Ramesh Verma, House: Valiyakath (H) Compound, Rampur Kalan, Sitapur - 261203
+Admitted 12/02/2025. Discharged on 19/02/2025.
+Complaint: C/O fever x 4 days and fatigue.
+Vitals: BP 134/84 mmHg, Pulse 82 /min, SpO2 98 %.
+Diagnosis: Type 2 diabetes mellitus (E11.9).
+Medication: Tab. Metformin 500 mg 1-0-1 x 30 days; Tab. Paracetamol 500 mg SOS.
+Treating Physician: Dr. Anand Kulkarni; Nursing: N/O Priya Menon.
+Follow-up WhatsApp: https://wa.me/919876501122 | Direct tel:+919876501122
+Printed for: Arjun Verma
+
+-----BEGIN STRUCTURED-----
+{"uhid": "SH-25-1001", "patient_name": "Arjun Verma", "ration_card": "RC-44019922", "pin": "261203", "admission": "2025-02-12", "discharge": "2025-02-19"}
+-----END STRUCTURED-----

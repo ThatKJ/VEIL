@@ -57,14 +57,14 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
 <h2>5. Privacy Passport &amp; Live Demo (measured on real outputs)</h2>
 <ul>
 <li><b>Truth-free Privacy Passport on official <code>dev</code> (<code>tools/veil_passport.py</code>):</b> <b>200/200</b> physical files accounted (199 unique SHA-256s), 194 exported, 6 quarantined, 0 parse failures, 17/17 tables row-count preserved; <b>0 residual hits</b> across 197 scanned channels (383 input values); <b>100.0% sampled clinical expressions kept</b> (1637/1637, note intervals 24/24); 774/774 pseudonyms placed. Uninspected blind <code>s9_B_unfamiliar</code>: 17/17 files accounted, 0 residual hits, 100.0% sampled clinical kept, 110/110 pseudonyms placed.</li>
-<li><b>End-to-end Live Demo on <code>chaos_dev</code> (<code>tools/veil_demo.py</code>):</b> Fragmented patient <code>PT00005</code> linked 21/21 to <code>PSN-81FAPE</code>, homonyms kept distinct (<code>PSN-YRWD2D</code> vs <code>PSN-YWXMP4</code>), 107/109 probes kept, adaptive policy reduced attacker <code>A4</code> <code>1.00 → 0.23</code>, injected phone/dose defect caught by Passport and eliminated cleanly (`416/416` placed).</li>
+<li><b>End-to-end Demo &amp; Command Center (<code>tools/veil_demo.py</code>, <code>tools/veil_ui.py</code>):</b> On <code>chaos_dev</code>, <code>PT00005</code> linked 21/21 (<code>PSN-81FAPE</code>), homonyms separated, 107/109 probes kept, attacker <code>A4</code> dropped <code>1.00 → 0.23</code>. Offline stdlib Command Center (<code>./launch_veil.sh</code> + <code>demo/sample_hospital/</code>) visualizes live diffs, SVG identity graph, Privacy Arena, LOS deltas, and defect catch/repair.</li>
 </ul>
 
 <h2>6. Security, Scaling &amp; Honest Limitations</h2>
 <div class="two">
 <ul>
 <li><code>RAKSHA_SECRET</code> never touches disk/logs; A/A determinism 1.0, A/B shifts distinct; strict <code>is_relative_to(sanitized)</code> export containment; symlink/binary/&gt;64-deep JSON quarantined.</li>
-<li><b>31/31 unit tests pass</b> (`unittest`, contracts, offline blocked-socket, 5 MB ReDoS, strict bounded `ast.literal_eval`, Passport 200/200). 100k x 100k unique patients in <b>13.95s / 707.5 MB</b> (`0` quarantined).</li>
+<li><b>33/33 tests pass</b> (`unittest`, contracts, offline blocked-socket, ReDoS, bounded `ast.literal_eval`, Passport 200/200, UI/demo suite). 100k x 100k patients in <b>13.95s / 707.5 MB</b> (`0` quarantined). MIT licensed.</li>
 </ul>
 <ul>
 <li>Local harness scores omit sealed scaling weight and no finite test proves anonymity outside the published attacker model; Passport sampled clinical expressions kept does not equal ground-truth <code>medical_kept</code>.</li>

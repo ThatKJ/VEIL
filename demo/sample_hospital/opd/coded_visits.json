@@ -1,0 +1,50 @@
+{
+  "facility": "District General Hospital - OPD Sync",
+  "column_codes": {
+    "c01": "op_no",
+    "c02": "patient_name",
+    "c03": "relative_name",
+    "c04": "mobile",
+    "c05": "aadhaar",
+    "c06": "diagnosis",
+    "c07": "icd10"
+  },
+  "visits": [
+    {
+      "c01": "SH-25-1001",
+      "c02": "अर्जुन वर्मा",
+      "c03": "S/O Ramesh Verma",
+      "c04": "9876501122",
+      "c05": "3412 8891 5502",
+      "c06": "Type 2 diabetes mellitus",
+      "c07": "E11.9"
+    },
+    {
+      "c01": "SH-25-1002",
+      "c02": "M. Sharma",
+      "c03": "W/O Vivek Sharma",
+      "c04": "9811122334",
+      "c05": "5120 4419 7731",
+      "c06": "Essential hypertension",
+      "c07": "I10"
+    },
+    {
+      "c01": "SH-25-1003",
+      "c02": "Meera Sharma",
+      "c03": "W/O Harish Sharma",
+      "c04": "9811199887",
+      "c05": "7712 9088 1234",
+      "c06": "Osteoarthritis, unspecified",
+      "c07": "M19.9"
+    },
+    {
+      "c01": "SH-25-1004",
+      "c02": "Kavita Nair",
+      "c03": "D/O Balan Nair",
+      "c04": "9845098765",
+      "c05": "6291 3304 8812",
+      "c06": "Wilson's disease",
+      "c07": "E83.0"
+    }
+  ]
+}
