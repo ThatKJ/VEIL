@@ -219,7 +219,7 @@ COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "p
             "disease", "illness", "surgery", "operation", "rog", "बीमारी", "निदान"}
 
 
-_PAT_HON_RX = re.compile(rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|जी|साहब|दीदी|भाई|बहन))\b")
+_PAT_HON_RX = re.compile(rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|garu|anna|akka|banna|hukum|bhaisa|apa|जी|साहब|दीदी|भाई|बहन))\b")
 
 
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
@@ -298,7 +298,8 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         if toks and _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
             H.add_name(" ".join(toks))
             e["rel"].append(toks)
-    for m in RX_IDTOK.finditer(text):
+    id_scan = re.sub(r"(?i)\b(?:https?://[^\s\"'<>?]+|urn:(?:uuid|oid):[\w.\-]+)", " ", text)
+    for m in RX_IDTOK.finditer(id_scan):
         tok = m.group(0)
         if id_digits_ok(tok):
             a = re.sub(r"[^0-9A-Za-z]", "", tok).upper()
@@ -821,7 +822,9 @@ class Rewriter:
         if kind in ("STRUCT", "RELATION"):
             return s
         if kind == "DOCTOR":
-            return s if re.match(r"(?i)\s*(?:dr\.?|डॉ)", s) or not re.search(r"\d{4}", s) else scrub_text(s, ctx, self.sw)
+            if re.search(r"(?i)(?:\bnaam\s*[=:]|\bpatient\b|\buhid\b|\bmrn\b|\d{4})", s):
+                return scrub_text(s, ctx, self.sw)
+            return s
         if kind == "MRN":
             st["identifiers"] += 1
             return ctx.psn or "[ID]"

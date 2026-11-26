@@ -321,6 +321,39 @@ class RegressionTests(unittest.TestCase):
             self.assertNotIn("Rajesh", npk)
             self.assertIn("K/C/O Bell's palsy", npk)
 
+    def test_phase8_exportedfor_xhtml_url_id_and_begum_surname(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            # 1. exportedFor metadata must never bypass scrub_text as DOCTOR; xhtml namespace must not inject fake MRN
+            (inp / "opd.json").write_text(json.dumps({
+                "meta": {"exportedFor": "query: naam=VariantFirstname UnseenSurname"},
+                "tokens": [{"pt": {"ref": "AYU-H-55-0599", "label": "S.D. Begum"}, "dx": "Dengue fever"}],
+            }), encoding="utf-8")
+            # 2. Bundle with xmlns="http://www.w3.org/1999/xhtml" and surname "Begum"
+            (inp / "fhir.json").write_text(json.dumps({
+                "resourceType": "Bundle",
+                "type": "collection",
+                "entry": [{
+                    "resource": {
+                        "resourceType": "Patient",
+                        "id": "p-begum",
+                        "text": {"status": "generated", "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">Shidhaat Begum</div>"},
+                        "name": [{"family": "Begum", "given": ["Shidhaat"]}],
+                        "identifier": [{"value": "AYU-H-55-0599"}],
+                    }
+                }],
+            }), encoding="utf-8")
+            self._run_cli(inp, out, secret="sec-blindfix-9988")
+            opd_out = (out / "sanitized" / "opd.json").read_text(encoding="utf-8")
+            self.assertNotIn("VariantFirstname", opd_out)
+            self.assertNotIn("UnseenSurname", opd_out)
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            pids = [r["patient"] for r in recs if r["patient"]]
+            self.assertEqual(len(pids), 2)
+            self.assertEqual(len(set(pids)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

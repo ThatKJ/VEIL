@@ -27,6 +27,14 @@ def _strip_fused_suffix(tl: str) -> str:
 
 
 def name_keys(tokens: list[str]) -> tuple[str, ...]:
+    # Pre-count non-generic tokens >= 2 chars so surname-capable generics (e.g. Begum, Singh)
+    # are dropped as middle titles ("Shanti Devi Verma") yet preserved when functioning as surname ("S.D. Begum").
+    non_gen2 = 0
+    for t in tokens:
+        if not re.fullmatch(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", t):
+            tl = t.strip(".").lower()
+            if tl not in L.GENERIC_NAME_TOKENS and len(tl) >= 2:
+                non_gen2 += 1
     ks = []
     for t in tokens:
         if re.fullmatch(r"(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", t):
@@ -34,7 +42,7 @@ def name_keys(tokens: list[str]) -> tuple[str, ...]:
                 ks.append(ch.lower())
             continue
         tl = t.strip(".").lower()
-        if tl in L.GENERIC_NAME_TOKENS:
+        if tl in L.GENERIC_NAME_TOKENS and not (tl in L.SURNAME_GENERICS and non_gen2 < 2):
             continue
         if len(tl) == 1 and tl.isalpha():
             ks.append(tl)

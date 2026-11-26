@@ -106,13 +106,15 @@ def skel(token: str) -> str:
 
 
 # ---------------------------------------------------------------- name structure
-HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|dadi|aaji|babu|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|मैडम|जी|साहब|दीदी|भाई|बहन)"
+HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|dadi|aaji|babu|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|garu|anna|akka|banna|hukum|bhaisa|apa|मैडम|जी|साहब|दीदी|भाई|बहन)"
 HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्रीमान|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?|सौ\.?|कै\.?|बीबी|रोगी|मरीज़|मरीज|রোগী)"
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
-                       "prasad", "singh", "kaur", "shri", "shriman", "smt", "sahab", "didi", "bhai", "ben",
+                       "prasad", "singh", "kaur", "shri", "shriman", "smt", "sahab", "saheb", "didi", "bhai", "ben",
                        "kaka", "paaji", "bhau", "tai", "dada", "aaji", "babu", "chacha", "chachaji", "babuji",
-                       "bhaiya", "amma",
+                       "bhaiya", "amma", "garu", "anna", "akka", "sir", "banna", "hukum", "bhaisa", "da", "di", "apa",
                        "देवी", "कुमार", "कुमारी", "जी", "श्री", "श्रीमान", "श्रीमती", "बीबी"}
+SURNAME_GENERICS = {"devi", "kumar", "kumari", "begum", "bibi", "bai", "singh", "kaur", "lal", "ram", "prasad",
+                    "देवी", "कुमार", "कुमारी", "बीबी"}
 
 KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|Dikri|Patni|Puttar|Vali|पुत्री|पुत्र|पत्नी|पति|पिता|माता|बेटा|बेटी|पुत्तर|धी|घरवाली|मुलगी|मुलगा|नवरा)"
 
@@ -143,7 +145,7 @@ FIELD_RULES = [
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
     ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|relation_type"),
     ("DOCTOR", r"doctor\w*|dr|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
-               r"nurse|staff|clerk|exported|exportedby|practitioner|performer|author|signedby|verifiedby"),
+               r"nurse|staff|clerk|exportedby|practitioner|performer|author|signedby|verifiedby"),
     ("SAFE", r"hospital|facility|lab|department|dept|specialty|speciality|ward|bed|"
              r"diagnos\w*|icd\w*|condition|complaint\w*|history|procedure\w*|package\w*|drug\w*|medicin\w*|"
              r"medication\w*|dose|dosage|test\w*|loinc|result\w*|value|unit\w*|range|amount\w*|status|vital\w*|"
