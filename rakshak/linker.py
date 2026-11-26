@@ -84,31 +84,6 @@ def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
     return inits[0] == ym[0][0] and (len(inits) == 1 or len(ym) == 1 or all(any(t[0] == i for t in ym) for i in inits))
 
 
-def _edit_le1(a: str, b: str) -> bool:
-    """True when two >=4-char skeletons starting with the same letter differ by <=1 edit."""
-    if len(a) < 4 or len(b) < 4 or a[0] != b[0] or abs(len(a) - len(b)) > 1:
-        return False
-    if a == b:
-        return True
-    i = j = diffs = 0
-    while i < len(a) and j < len(b):
-        if a[i] == b[j]:
-            i += 1
-            j += 1
-        else:
-            diffs += 1
-            if diffs > 1:
-                return False
-            if len(a) > len(b):
-                i += 1
-            elif len(b) > len(a):
-                j += 1
-            else:
-                i += 1
-                j += 1
-    return diffs + (len(a) - i) + (len(b) - j) <= 1
-
-
 def _name_compatible(a: Cluster, b: Cluster) -> bool:
     if not a.names or not b.names:
         return True
@@ -119,22 +94,26 @@ def _name_compatible(a: Cluster, b: Cluster) -> bool:
             if mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)
                             or _initial_match(x, y) or _initial_match(y, x)):
                 return True
-            if (x[0] == y[0] or _edit_le1(x[0], y[0])) and len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1]:
+            if x[0] == y[0] and len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1]:
                 return True
     return False
 
 
 def _rel_match(ra: set[tuple[str, ...]], rb: set[tuple[str, ...]]) -> int:
-    """Return 2 for full multi-token relative match, 1 for compatible prefix/single-token match, 0 otherwise."""
+    """Return 2 for full multi-token relative match, 1 for 1-token-vs-full given-name match, 0 otherwise."""
     if not ra or not rb:
         return 0
     if ra & rb:
-        return 2 if any(len(x) >= 2 for x in (ra & rb)) else 1
+        if any(len(x) >= 2 for x in (ra & rb)):
+            return 2
+        if any(len(x) == 1 and len(x[0]) >= 3 for x in (ra & rb)):
+            return 1
+        return 0
     for x in ra:
         for y in rb:
-            mx = {t for t in x if len(t) >= 2}
-            my = {t for t in y if len(t) >= 2}
-            if mx and my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)):
+            if (len(x) == 1 and len(x[0]) >= 3 and len(y) >= 2 and x[0] == y[0]) or (
+                len(y) == 1 and len(y[0]) >= 3 and len(x) >= 2 and y[0] == x[0]
+            ):
                 return 1
     return 0
 

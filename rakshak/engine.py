@@ -142,12 +142,22 @@ def sniff_delim(text: str, ext: str) -> str:
         d = _delimited(text)
         if d:
             return d
-    first = text.replace("\r\n", "\n").replace("\r", "\n").split("\n", 1)[0]
-    cands = {"\t": first.count("\t"), ",": first.count(","), ";": first.count(";"), "|": first.count("|")}
-    if ext == ".tsv" and cands["\t"]:
+    sample = text[:4096].replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r'"[^"]*"', "", ln) for ln in sample.splitlines() if ln.strip()][:25]
+    if not lines:
+        return "\t" if ext == ".tsv" else ","
+    if ext == ".tsv" and "\t" in lines[0]:
         return "\t"
-    best = max(cands, key=lambda k: (cands[k], k == ","))
-    return best if cands[best] else ("\t" if ext == ".tsv" else ",")
+    best_d, best_score = ("," if ext != ".tsv" else "\t"), (-1, -1, 0)
+    for d in ("\t", ",", ";", "|"):
+        counts = [ln.count(d) for ln in lines if ln.count(d) > 0]
+        if not counts:
+            continue
+        mode, hits = Counter(counts).most_common(1)[0]
+        score = (hits, mode, 1 if (d == "\t" and ext == ".tsv") or (d == "," and ext != ".tsv") else 0)
+        if score > best_score:
+            best_d, best_score = d, score
+    return best_d
 
 
 _INDIC_DIGITS = str.maketrans(
