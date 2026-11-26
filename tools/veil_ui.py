@@ -80,20 +80,20 @@ HISTORICAL_BENCHMARKS = {
     "team": "The Aevos",
     "team_leader": "Ishan Kumar",
     "team_members": ["Ishan Kumar", "Kirtan", "Aryan Verma", "Ukani Het"],
-    "checkpoint": "APEX (main, local candidate known-good-14 / frozen engine d6c0d3e)",
+    "checkpoint": "OMEGA (main, verified 60/60 tests / core engine 87ebe5d)",
     "disclaimer": (
         "Measured offline using the local synthetic harness and re-implemented attacker "
         "(NOT official competition evaluation; H20/H21/H2/s9_C are reclassified diagnostic datasets)."
     ),
     "runs": [
-        {"dataset": "dev", "type": "Official Practice", "score": "92.49 (local w/ perf)", "leak_pct": "0.0% (check_dev 0/3230)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "dev", "type": "Official Practice", "score": "92.4935 (0.72s / 32.3 MB)", "leak_pct": "0.0% (check_dev 0/3230)", "false_merges": 0, "canaries": "0/4"},
         {"dataset": "chaos_dev", "type": "Dev Synthetic", "score": "93.01 (local w/ perf)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/3"},
         {"dataset": "chaos_holdout2", "type": "Diag (FM 11 -> 0)", "score": "95.20 (local w/ perf)", "leak_pct": "0.1% (truth)", "false_merges": 0, "canaries": "0/4"},
         {"dataset": "chaos_holdout18", "type": "Diag Assam/Odisha", "score": "87.22 (local w/ perf)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_holdout19", "type": "Diag Karnataka+JSONL", "score": "93.54 (local w/ perf)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "chaos_holdout19", "type": "Diag Karnataka+JSONL", "score": "93.57 (OMEGA 87ebe5d)", "leak_pct": "0.0% (truth)", "false_merges": 0, "canaries": "0/4"},
         {"dataset": "chaos_holdout20", "type": "Diag Haryana/EAV", "score": "86.07 (local w/ perf)", "leak_pct": "0.1% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "chaos_holdout21", "type": "Diag Kerala/Malayalam", "score": "89.20 (local w/ perf)", "leak_pct": "0.2% (truth)", "false_merges": 0, "canaries": "0/4"},
-        {"dataset": "4_blind_suites_apex", "type": "Frozen APEX Unseen (9901..9904)", "score": "92.99 mean (min 88.57)", "leak_pct": "0.00% - 0.07%", "false_merges": "0 / 0 / 32 / 3", "canaries": "0/16"},
+        {"dataset": "chaos_holdout21", "type": "Diag Kerala/Malayalam", "score": "89.71 (OMEGA 87ebe5d)", "leak_pct": "F0.5 0.9990", "false_merges": 0, "canaries": "0/4"},
+        {"dataset": "4_blind_suites_omega", "type": "Untouched OMEGA Blind (9961..9964)", "score": "89.19 mean (92.73 max)", "leak_pct": "F0.5 0.997-0.998", "false_merges": "0 / 0 / 0 / 0", "canaries": "0/16"},
     ],
     "scalability": [
         {"workload": "100k repeat (500p)", "records": "100,000", "wall_s": 3.614, "peak_rss_mb": 209.6, "throughput": "27,670 rows/s"},
@@ -102,10 +102,10 @@ HISTORICAL_BENCHMARKS = {
         {"workload": "500k repeat (50kp)", "records": "500,000", "wall_s": 22.207, "peak_rss_mb": 862.9, "throughput": "22,515 rows/s"},
         {"workload": "1M repeat (100kp)", "records": "1,000,000", "wall_s": 41.747, "peak_rss_mb": 1818.6, "throughput": "23,954 rows/s"},
         {"workload": "1M unique (1M pts)", "records": "1,000,000", "wall_s": 56.441, "peak_rss_mb": 2481.1, "throughput": "17,718 rows/s"},
-        {"workload": "1.25M mixed (6,252 files)", "records": "943,750", "wall_s": 90.366, "peak_rss_mb": 1623.8, "throughput": "10,444 rows/s"},
+        {"workload": "1.25M mixed (6,252 files)", "records": "943,750 physical / 1.25M lines", "wall_s": 90.366, "peak_rss_mb": 1623.8, "throughput": "10,444 rows/s"},
     ],
     "scale": {"records": "1,000,000 x 1,000,000", "seconds": 56.441, "peak_rss_mb": 2481.1},
-    "checks": {"unit_tests": "47/47 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
+    "checks": {"unit_tests": "60/60 OK", "official_checker": "READY TO SUBMIT (CONTRACT OK)"},
 }
 
 

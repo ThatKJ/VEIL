@@ -1,4 +1,4 @@
-"""Adversarial mutation & Assurance 2.0 record/field/temporal tests."""
+"""Adversarial mutation & Assurance 3.0 record/field/temporal tests."""
 from __future__ import annotations
 
 import json

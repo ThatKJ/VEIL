@@ -212,7 +212,7 @@ def generate_mutation_suite(inp: Path, variant: str = "standard") -> dict:
 
 
 def verify_semantic_invariants(inp: Path, out: Path, meta: dict) -> dict:
-    """Assert security, linkage, clinical, temporal, and Assurance 2.0 invariants without fixed bytes."""
+    """Assert security, linkage, clinical, temporal, and Assurance 3.0 invariants without fixed bytes."""
     passport = VP.audit(inp, out)
     pts = meta["patients"]
     rep = json.loads((out / "report.json").read_text(encoding="utf-8"))

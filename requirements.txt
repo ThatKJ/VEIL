@@ -1,1 +1,1 @@
-# Rakshak uses only the Python 3.10+ standard library (no models, no network, no native extensions).
+# Rakshak uses only the Python 3.9+ standard library (no models, no network, no native extensions).
