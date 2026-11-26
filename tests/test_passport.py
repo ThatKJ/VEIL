@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,55 @@ class PassportTests(unittest.TestCase):
             rendered = json.dumps(clean) + V.render_html(clean, None)
             self.assertNotIn("Kavitha Ramesh", rendered)
             self.assertNotIn("9876543210", rendered)
+
+    def test_assurance3_institutional_discrimination_and_cross_record_temporal(self):
+        with tempfile.TemporaryDirectory() as d:
+            inp, out = Path(d) / "in", Path(d) / "out"
+            inp.mkdir()
+            (inp / "fhir.json").write_text(json.dumps({
+                "resourceType": "Bundle",
+                "type": "collection",
+                "entry": [
+                    {"fullUrl": "Patient/1", "resource": {"resourceType": "Patient", "id": "1",
+                        "name": [{"text": "Asha Kumari"}], "birthDate": "1985-04-12",
+                        "identifier": [{"value": "UH-7701"}]}},
+                    {"fullUrl": "Organization/1", "resource": {"resourceType": "Organization", "id": "1",
+                        "name": "Arogya Seva Sadan"}},
+                ],
+            }), encoding="utf-8")
+            (inp / "visits.csv").write_text(
+                "uhid,patient_name,visit_date\n"
+                "UH-7701,Asha Kumari,10/01/2026\n"
+                "UH-7701,Asha Kumari,20/01/2026\n",
+                encoding="utf-8",
+            )
+            subprocess.run([sys.executable, str(ROOT / "main.py"), "--input", str(inp), "--output", str(out)],
+                           check=True, capture_output=True, env={**os.environ, "RAKSHA_SECRET": "a3-test-secret"})
+            clean = V.audit(inp, out)
+            self.assertEqual(clean["assurance_version"], "3.0")
+            self.assertEqual(clean["verdict"], "PASS")
+            self.assertEqual(clean["privacy"]["residual_pattern_hits"], {})
+            self.assertGreaterEqual(clean["privacy"]["institutional_entities_distinguished"], 1)
+            self.assertEqual(clean["checks"]["temporal"]["status"], "PASS")
+
+            # Contaminating institutional name with an unredacted patient ID/name on same line must FAIL
+            fhir_out = next((out / "sanitized").glob("fhir*.json"))
+            raw_txt = fhir_out.read_text(encoding="utf-8")
+            fhir_out.write_text(raw_txt.replace("Arogya Seva Sadan", "Arogya Seva Sadan Patient: Rahul Verma 9811223344"), encoding="utf-8")
+            contam = V.audit(inp, out)
+            self.assertEqual(contam["checks"]["privacy"]["status"], "FAIL")
+            self.assertGreaterEqual(contam["privacy"]["residual_pattern_hits"].get("institutional_contaminated", 0), 1)
+            self.assertEqual(contam["verdict"], "FAIL")
+
+            # Restoring clean JSON and corrupting ONE row's date shift must FAIL temporal chronology
+            fhir_out.write_text(raw_txt, encoding="utf-8")
+            csv_out = next((out / "sanitized").glob("visits*.csv"))
+            lines = csv_out.read_text(encoding="utf-8").splitlines()
+            lines[2] = re.sub(r"\d{2}/\d{2}/\d{4}", "01/01/2028", lines[2])
+            csv_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            bad_t = V.audit(inp, out)
+            self.assertEqual(bad_t["checks"]["temporal"]["status"], "FAIL")
+            self.assertEqual(bad_t["verdict"], "FAIL")
 
 
 if __name__ == "__main__":

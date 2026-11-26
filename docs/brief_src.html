@@ -14,7 +14,7 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
 .pb{page-break-before:always}
 </style></head><body>
 <h1>VEIL — Verifiable Entity Integrity Layer</h1>
-<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python stdlib · CHAMPION (<code>known-good-10</code>) · github.com/ThatKJ/VEIL</div>
+<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python stdlib · CHAMPION (<code>known-good-11</code>) · github.com/ThatKJ/VEIL</div>
 
 <h2>1. What VEIL is</h2>
 <p>VEIL is a clinical privacy <b>release-assurance</b> engine for fragmented, multilingual Indian hospital exports (CSV/TSV, super-header/EAV/stacked/box tables, nested/stringified/coded JSON, FHIR R4, HL7 v2, notes across Latin, 10 Indic scripts incl. Assamese/Odia/South-Indic, and 9 numeral systems). It resolves patients across files, scripts, and hospitals using 50-bit keyed pseudonyms, applies ARX minimal-loss <b>pooled</b> risk control, protects clinical probes/eponyms (`pyDeid`/Philter/medspaCy transfers), and verifies every export. Zero LLMs, zero ML bloat, zero network.</p>
@@ -26,14 +26,14 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
        ─► 4 Identity graph: 10-script→Deva skeleton + honorific/kinship noise filter; cluster given-name veto; 50-bit PSN-XXXXXXXXXX
        ─► 5 Pooled-profile ARX lattice: k5/k10 equivalence + k_dist (5y-band w/ dist drop before 10y) + rare-ICD/age≥80; HMAC date shifts
        ─► 6 Chunked Rewrite: KV prose-boundary guard; SN/Dr./Sr./Sis., Addison's/CPAP &amp; S/O complaint protection; atomic export
-       ─► 7 Assurance 2.0: O(N) Python TokenSetSub + record/occurrence/temporal Privacy Passport &amp; Mutation Lab (tools/ — stdlib runtime)</pre>
+       ─► 7 Assurance 3.0: O(N) Python TokenSetSub + role-aware temporal &amp; institutional Privacy Passport 3.0 (tools/ — stdlib runtime)</pre>
 
 <h2>3. Distinctive engineering &amp; Champion tournament evidence</h2>
 <ul>
 <li><b>Pooled ARX minimal-loss lattice</b> — adds <code>k_dist</code> (<code>width=5</code> + district suppression before 10-year widening), keeping <code>11/53</code> <code>dev</code> &amp; <code>10/61</code> <code>H18</code> patients in 5y bands at <code>k≥5</code>.</li>
 <li><b>Zero-false-merge identity graph (vs Splink-TF &amp; RapidFuzz)</b> — benchmarks proved generic Splink-TF suffers <code>FM=609–2,902</code> without whole-cluster vetoes; VEIL adds Assamese <code>ৰ/ৱ</code>, Odia, HL7 <code>^</code> &amp; honorific/title stripping (`Mr`/`Sardar`/`Baideu`) at <b>0 FM</b> everywhere.</li>
 <li><b>Clinical Context &amp; Classical Model Tournament (`pyDeid`, Philter, medspaCy, `python-crfsuite`, `ahocorasick_rs`)</b> — E2E ablations across 5 datasets selected <code>pyDeid</code> eponym/disambiguator &amp; `SN` nursing transfers while rejecting 52–71 KB CRFs (`+0.000` recall, `-0.002` probes on `dev`) and Rust `ahocorasick_rs` (`-2.8%` slower on <code>100k_unique</code> CSVs) to keep runtime 100% pure stdlib.</li>
-<li><b>Truth-free Release Assurance 2.0 (<code>tools/veil_passport.py</code>, <code>mutation_lab.py</code>)</b> — 1:1 SHA-256 pairing, record-level <code>loc/out</code>, occurrence-aware clinical checks, decoded residue sweeps.</li>
+<li><b>Truth-free Release Assurance 3.0 (<code>tools/veil_passport.py</code>, <code>mutation_lab.py</code>)</b> — 1:1 SHA-256 accounting, institutional vs patient role separation (`privacy 197/197 PASS` on `dev`), per-record &amp; cross-record temporal checks (`724/724 PASS`), occurrence-aware clinical checks (`2361/2361 PASS`), decoded residue sweeps.</li>
 </ul>
 
 <div class="pb"></div>
@@ -54,21 +54,21 @@ pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;
 </table>
 <p class="note"><b>CHAMPION gains:</b> Eliminated free-text <code>kv_rewrite</code> parenthesized-label truncation; rescued all <code>223/223</code> <code>SN</code> nurse probes on <code>H19</code> (<b>+1.18</b> pts); lifted <code>H18</code> Assamese/Odia/elder-DOB linkage (<b>+0.77</b> pts); lifted <code>H21</code> to <b>89.20</b>; hit <b>95.90</b> on unseen <code>champion_b1</code> (`titan_b2` = <code>94.33</code> on `kg9`). Official `check_dev.py`: `0.0%` leaked, `4763/4855` medical (`92` intentional `district` suppressions).</p>
 
-<h2>5. Assurance 2.0, Command Center &amp; 1M-Row Streaming Scale</h2>
+<h2>5. Assurance 3.0, Command Center &amp; 1M-Row Streaming Scale</h2>
 <ul>
-<li><b>VEIL Assurance Engine 2.0 (<code>tools/veil_passport.py</code>):</b> Tri-state (`PASS/FAIL/WARNING/SKIPPED/INCONCLUSIVE`) audit with exact `loc/out` alignment, occurrence-aware clinical checks, multi-format/FHIR + compact HL7 temporal checks, and decoded Hex/Base64/`\uXXXX`/URL sweeps. Controlled defects verified in `tools/mutation_lab.py`.</li>
-<li><b>1,000,000-patient scaling (`tools/scale_titan.py`, &lt;4 GB / &lt;900s limits):</b> `100k_unique` in <b>12.67s / 597.0 MB</b>, `100k_mixed` (502 files) in <b>20.32s / 308.7 MB</b>; `kg9` measured `250k_mixed` in <b>53.34s / 760.5 MB</b>, `1M_repeat` in <b>113.66s / 3,350.3 MB</b>, and <b>1,000,000 distinct patients in 139.14s / 3,278.4 MB</b> (`7,187 rows/s`, `valid: true`, `0` collisions).</li>
-<li><b>Command Center (`./launch_veil.sh`, `tools/veil_ui.py`):</b> Offline pure-stdlib dashboard visualizing diffs, SVG identity graph, Privacy Arena, LOS, Assurance 2.0 telemetry, and ZIP export.</li>
+<li><b>VEIL Assurance Engine 3.0 (<code>tools/veil_passport.py</code>):</b> Zero-truth audit separating FHIR <code>Organization</code>/facility phrases from contaminated patient IDs (`dev` PASS on all 5 pillars: <code>structural 200/200</code>, <code>privacy 197/197</code>, <code>clinical 2361/2361</code>, <code>temporal 724/724</code> w/ <code>48/48</code> patient chronology, <code>identity 774/774</code>). Controlled defects verified in `tools/mutation_lab.py`.</li>
+<li><b>1,000,000-patient scaling (`tools/scale_titan.py`, &lt;4 GB / &lt;900s limits):</b> Scalar-first <code>Linker</code> compression + early text release cut RSS across every scale tier: `100k_unique` <b>12.38s / 516.9 MB</b> (`-98.5 MB`), `250k_mixed` <b>53.74s / 732.6 MB</b>, `500k_repeat` <b>55.59s / 1,766.6 MB</b> (`-208.7 MB`), `1M_repeat` <b>113.16s / 3,206.6 MB</b> (`-143.7 MB`), and <b>1,000,000 distinct patients in 128.93s / 3,176.2 MB</b> (`7,756 rows/s`, `valid: true`, `0` collisions).</li>
+<li><b>Command Center (`./launch_veil.sh`, `tools/veil_ui.py`):</b> Offline pure-stdlib dashboard visualizing diffs, SVG identity graph, Privacy Arena, LOS, Assurance 3.0 telemetry, and ZIP export.</li>
 </ul>
 
 <h2>6. Security &amp; Honest Limitations</h2>
 <div class="two">
 <ul>
-<li>`RAKSHA_SECRET` never hits disk/logs; 50-bit `PSN-XXXXXXXXXX` deterministic (1.0) &amp; collision-safe (0/1M); strict `is_relative_to(sanitized)` containment; symlinks/binaries/&gt;64 JSON quarantined.</li>
-<li><b>37/37 tests pass</b> (unit, security, contracts, 200k pseudonym uniqueness, Assurance 2.0, Mutation Lab, UI). Official `check_submission.py --run`: READY TO SUBMIT. MIT license.</li>
+<li>`RAKSHA_SECRET` never hits disk/logs; 50-bit `PSN-XXXXXXXXXX` deterministic (1.0) &amp; collision-safe (0/1M); strict `is_relative_to(sanitized)` containment; symlinks/binaries/&gt;64 JSON quarantined; `180/180` Hypothesis fuzzing properties pass.</li>
+<li><b>38/38 tests pass</b> (unit, security, contracts, 200k pseudonym uniqueness, Assurance 3.0, Mutation Lab, UI). Official `check_submission.py --run`: READY TO SUBMIT. MIT license.</li>
 </ul>
 <ul>
-<li>Local harness scores omit sealed weights and finite sweeps cannot prove formal anonymity outside the published attacker model; Passport facility-name heuristics can flag allowed hospital names on ground-truth-free runs.</li>
+<li>Local harness scores omit sealed weights, and finite sweeps/assurances cannot prove formal anonymity outside the published attacker model (`A1–A7`); preserving diagnoses &amp; LOS keeps rare-condition `A5` non-zero.</li>
 <li>Unknown writing scripts abstain safely from cross-script merging to protect `0` false merges; `H20` multi-row block probes stay unaligned under single-row CSV truth lookup. Docker inactive locally.</li>
 </ul>
 </div>

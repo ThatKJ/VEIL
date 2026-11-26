@@ -1182,14 +1182,16 @@ def pass1(job: FileJob, H: Harvest):
                 for ci, v in enumerate(row):
                     k = (_eav_cell_kind(attr_v) or kinds[ci]) if (job.eav and ci == job.eav[1] and attr_v is not None) else kinds[ci]
                     if k == "GENDER":
-                        r.ev["gender"] = gender_of(v)
+                        g_v = gender_of(v)
+                        if g_v:
+                            r.ev["gender"] = sys.intern(g_v)
                     elif k == "DISTRICT":
                         H.safe_places.add(norm(v))
-                        r.ev["district"] = v
+                        r.ev["district"] = sys.intern(v) if len(v) <= 64 else v
                     elif k == "TEHSIL":
                         H.safe_places.add(norm(v))
                     elif k == "COND" and v.strip():
-                        r.ev.setdefault("conds", set()).add(norm(v))
+                        r.ev.setdefault("conds", set()).add(sys.intern(norm(v)) if len(v) <= 80 else norm(v))
                     elif k == "NAME_SHAPE":
                         H.add_name(v)
                     elif k in (None, "SAFE"):
@@ -1213,6 +1215,9 @@ def pass1(job: FileJob, H: Harvest):
                 if len(names) > 1:
                     r.ev["names"] = [" ".join(names).split()]
                 job.recs.append(r)
+            if stream_mode:
+                job.text = None
+                del peek, row_iter, data_iter
         else:
             job.kind = "text"
             r = Rec(job.rel, "doc")
@@ -1871,8 +1876,17 @@ def _rehydrate_job(j: FileJob) -> None:
 
 
 def run(inp: Path, out: Path, policy: dict) -> int:
+    out.mkdir(parents=True, exist_ok=True)
+    _old_rec = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(max(_old_rec, 4000))
+        return _run_impl(inp, out, policy)
+    finally:
+        sys.setrecursionlimit(_old_rec)
+
+
+def _run_impl(inp: Path, out: Path, policy: dict) -> int:
     t0 = time.monotonic()
-    sys.setrecursionlimit(4000)
     st = Stats()
     H = Harvest()
     jobs = []
@@ -1937,7 +1951,9 @@ def run(inp: Path, out: Path, policy: dict) -> int:
     if str(policy.get("link", "on")) == "off":           # ablation only
         roots = list(range(len(recs)))
     else:
-        linker = Linker([r.ev for r in recs])
+        if len(recs) >= 50_000:
+            gc.collect()
+        linker = Linker([r.ev for r in recs], release=True)
         roots = linker.run()
         del linker
     groups = defaultdict(list)

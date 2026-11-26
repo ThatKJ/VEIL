@@ -63,9 +63,17 @@ CLINICAL = [
     ("clinician", re.compile(r"\b(?:Dr\.|N/O|Sis\.)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?")),
 ]
 NON_PERSON = re.compile(
-    r"(?i)facility|hospital|organi[sz]ation|lab|panel|test|doctor|practitioner|department|ward|"
+    r"(?i)facility|hospital|organi[sz]ation|practitioner|location|healthcareservice|"
+    r"clinic|centre|center|institute|institution|publisher|assigner|issuer|custodian|"
+    r"lab|panel|test|doctor|department|ward|branch|"
     r"referr|consult|staff|nurse|drug|medic|package|procedure|diagnos|code|display|scheme|insurer|tpa"
 )
+INSTITUTIONAL_PHRASE = re.compile(
+    r"(?i)\b(?:hospital|clinic|sadan|sansthan|charitable|multispeciality|super\s*speciality|"
+    r"medical\s+college|trust|foundation|pathology|diagnostics?|laboratory|dispensary)\b"
+)
+_DOB_KEY = re.compile(r"(?i)^(?:birthDate|dob|date_of_birth|birthdate|janam|born|deathDate|deceasedDateTime)$")
+_DOB_LINE = re.compile(r"(?im)^.*\b(?:dob|date\s+of\s+birth|birth\s*date|janam|जन्म\s*तिथि)\b.*$")
 ID_KEY = re.compile(r"(?i)(?:^|_|\b)(?:name|naam|patient|uhid|mrn|aadha?a?r|abha|mobile|phone|contact|email)(?:$|_|\b)")
 PSN = re.compile(r"PSN-[0-9A-Z]{6,16}")
 
@@ -117,25 +125,42 @@ def _tabular_delim(suf: str, text: str) -> str:
     return ","
 
 
-def input_identifiers(inp: Path) -> set[str]:
-    """Independent harvest of personal identifier values across CSV/TSV headers and JSON keys."""
-    vals = set()
+def _harvest_independent_identifiers(inp: Path) -> tuple[set[str], set[str]]:
+    """Independent harvest of personal identifier values across CSV/TSV headers and JSON keys,
+    separating genuine institutional/facility strings using resourceType & contextual paths."""
+    vals: set[str] = set()
+    inst_vals: set[str] = set()
 
-    def add(v):
-        if isinstance(v, (str, int)) and len(str(v).strip()) >= 5:
-            sv = norm(str(v))
-            if sv not in ("patient_name", "patient", "relative", "unknown"):
-                vals.add(sv)
+    def _has_strong_id(raw_s: str) -> bool:
+        return bool(PHONE.search(raw_s) or AADHAAR.search(raw_s) or ABHA.search(raw_s) or PAN.search(raw_s) or EMAIL.search(raw_s))
+
+    def add(v, ctx_path: str = ""):
+        if not isinstance(v, (str, int)):
+            return
+        raw_s = str(v).strip()
+        if len(raw_s) < 5:
+            return
+        sv = norm(raw_s)
+        if sv in ("patient_name", "patient", "relative", "unknown"):
+            return
+        if INSTITUTIONAL_PHRASE.search(sv) and not _has_strong_id(raw_s):
+            inst_vals.add(sv)
+            return
+        if NON_PERSON.search(ctx_path):
+            return
+        vals.add(sv)
 
     def walk(o, key="", ctx=""):
         if isinstance(o, dict):
+            rt = o.get("resourceType")
+            ctx2 = f"{ctx}/{rt}" if isinstance(rt, str) and rt else ctx
             for k, v in o.items():
-                walk(v, k, ctx + "/" + str(k))
+                walk(v, k, f"{ctx2}/{k}")
         elif isinstance(o, list):
             for x in o:
                 walk(x, key, ctx)
-        elif ID_KEY.search(str(key)) and not NON_PERSON.search(ctx) and not re.match(r"(?i)\s*(?:dr|sr|sis|n/o)\.?\s", str(o)):
-            add(o)
+        elif ID_KEY.search(str(key)) and not re.match(r"(?i)\s*(?:dr|sr|sis|n/o)\.?\s", str(o)):
+            add(o, ctx)
 
     for p in sorted(inp.rglob("*")):
         if not p.is_file() or p.is_symlink():
@@ -153,24 +178,39 @@ def input_identifiers(inp: Path) -> set[str]:
             except csv.Error:
                 continue
             if rows:
-                cols = [i for i, h in enumerate(rows[0]) if ID_KEY.search(h) and not NON_PERSON.search(h)]
+                cols = [(i, h) for i, h in enumerate(rows[0]) if ID_KEY.search(h)]
                 for r in rows[1:]:
-                    for i in cols:
+                    for i, h in cols:
                         if i < len(r):
                             val = r[i].strip()
                             if val and not re.match(r"(?i)\s*(?:dr|sr|sis|n/o)\.?\s", val):
-                                add(val)
-    return {v for v in vals if not v.isdigit() or len(v) >= 6}
+                                add(val, h)
+    person = {v for v in vals if not v.isdigit() or len(v) >= 6}
+    return person, inst_vals
 
 
-def dates_in(text: str) -> list[tuple[int, int, int]]:
+def input_identifiers(inp: Path) -> set[str]:
+    """Independent harvest of personal identifier values across CSV/TSV headers and JSON keys."""
+    return _harvest_independent_identifiers(inp)[0]
+
+
+def _infer_mdy(text: str) -> bool:
+    raw = []
+    for m in DATE.finditer(text):
+        if m.group(3):
+            raw.append((int(m.group(1)), int(m.group(2))))
+    return any(b > 12 for a, b in raw) and not any(a > 12 for a, b in raw)
+
+
+def dates_in(text: str, mdy: bool | None = None) -> list[tuple[int, int, int]]:
     raw = []
     for m in DATE.finditer(text):
         if m.group(3):
             raw.append(("x", int(m.group(3)), int(m.group(1)), int(m.group(2))))
         else:
             raw.append(("iso", int(m.group(4)), int(m.group(5)), int(m.group(6))))
-    mdy = any(k == "x" and b > 12 for k, y, a, b in raw) and not any(k == "x" and a > 12 for k, y, a, b in raw)
+    if mdy is None:
+        mdy = any(k == "x" and b > 12 for k, y, a, b in raw) and not any(k == "x" and a > 12 for k, y, a, b in raw)
     return [(y, a, b) if k == "iso" else ((y, a, b) if mdy else (y, b, a)) for k, y, a, b in raw]
 
 
@@ -200,12 +240,14 @@ def _json_ptr(obj, pointer: str):
     return cur
 
 
-def _flat_json(obj) -> str:
+def _flat_json(obj, skip_dob: bool = False) -> str:
     parts = []
 
     def rec(o):
         if isinstance(o, dict):
             for k, v in o.items():
+                if skip_dob and _DOB_KEY.match(str(k)):
+                    continue
                 parts.append(str(k))
                 rec(v)
         elif isinstance(o, list):
@@ -219,11 +261,14 @@ def _flat_json(obj) -> str:
 
 
 class _ParsedOutputFile:
-    """Lazy parser for resolving exact exported records (CSV/TSV row, JSON pointer, JSONL line, text)."""
+    """Lazy parser for resolving exact exported/input records (CSV/TSV row, JSON pointer, JSONL line, text)."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, raw_decode: bool = False):
         self.path = path
-        self.text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        if path.is_file():
+            self.text = decode(path.read_bytes()) if raw_decode else path.read_text(encoding="utf-8", errors="replace")
+        else:
+            self.text = ""
         self.suf = path.suffix.lower()
         self.rows = None
         self.obj = None
@@ -241,19 +286,26 @@ class _ParsedOutputFile:
             except ValueError:
                 self.obj = None
 
-    def resolve_record(self, loc: str) -> tuple[str, bool]:
+    def resolve_record(self, loc: str, skip_dob: bool = False) -> tuple[str, bool]:
         if loc in ("doc", "@file"):
-            return self.text, bool(self.text)
+            txt = _flat_json(self.obj, skip_dob=True) if (skip_dob and self.obj is not None) else self.text
+            return txt, bool(self.text)
         if loc.startswith("row:") and re.fullmatch(r"row:\d+", loc):
             idx = int(loc[4:])
             if self.lines is not None:
                 return (self.lines[idx], True) if idx < len(self.lines) else ("", False)
             if self.rows is not None:
                 row_idx = idx + 1  # data row after header row[0]
-                return ("\n".join(self.rows[row_idx]), True) if row_idx < len(self.rows) else ("", False)
+                if row_idx >= len(self.rows):
+                    return "", False
+                if skip_dob and self.rows:
+                    hdr = self.rows[0]
+                    vals = [v for ci, v in enumerate(self.rows[row_idx]) if ci >= len(hdr) or not _DOB_KEY.search(hdr[ci].strip())]
+                    return "\n".join(vals), True
+                return "\n".join(self.rows[row_idx]), True
         if loc.startswith("/") and self.obj is not None:
             try:
-                return _flat_json(_json_ptr(self.obj, loc)), True
+                return _flat_json(_json_ptr(self.obj, loc), skip_dob=skip_dob), True
             except KeyError:
                 return "", False
         if loc.startswith("/"):
@@ -321,7 +373,8 @@ def audit(inp: Path, out: Path) -> dict:
     in_list = [p for p in sorted(inp.rglob("*")) if p.is_file() and not p.is_symlink()]
     in_pairs = [(hashlib.sha256(p.read_bytes()).hexdigest(), p) for p in in_list]
     R: dict = {
-        "assurance_version": "2.0",
+        "assurance_version": "3.0",
+        "verdict": "SKIPPED",
         "privacy": {},
         "clinical": {},
         "identity": {},
@@ -426,9 +479,10 @@ def audit(inp: Path, out: Path) -> dict:
     )
 
     # ---------------- A. Privacy residue (independent detectors across decoded channels)
-    ident = input_identifiers(inp)
+    ident, inst_vals = _harvest_independent_identifiers(inp)
     pat = Counter()
     resid_files = Counter()
+    inst_preserved = 0
     channels = {
         "report.json": SHA_HEX.sub("", (out / "report.json").read_text(encoding="utf-8")),
         "records.jsonl": (out / "records.jsonl").read_text(encoding="utf-8"),
@@ -437,6 +491,7 @@ def audit(inp: Path, out: Path) -> dict:
     for p in sorted((out / "sanitized").rglob("*")):
         if p.is_file():
             channels[p.relative_to(out).as_posix()] = p.read_text(encoding="utf-8", errors="replace")
+    _CONTAM_LINE = re.compile(r"(?i)(?:\bpatient\s*[:\-]\s*(?!PSN-)[A-Z][a-z]+)")
     for name, text in channels.items():
         tx = UUID.sub(" ", with_decoded_extras(text))
         for label, rx in (("phone", PHONE), ("aadhaar", AADHAAR), ("ABHA", ABHA), ("email", EMAIL), ("PAN", PAN)):
@@ -452,9 +507,27 @@ def audit(inp: Path, out: Path) -> dict:
         if hits:
             pat["input identity value"] += hits
             resid_files[name] += hits
+        if inst_vals:
+            matched_inst = [v for v in inst_vals if v in low]
+            if matched_inst:
+                # Never whitelist institutional text if direct PII/patient identity co-occurs on the same line
+                contam = 0
+                for line in tx.splitlines():
+                    ln = norm(line)
+                    if any(v in ln for v in matched_inst) and (
+                        PHONE.search(line) or AADHAAR.search(line) or ABHA.search(line)
+                        or PAN.search(line) or _CONTAM_LINE.search(line)
+                    ):
+                        contam += 1
+                if contam:
+                    pat["institutional_contaminated"] += contam
+                    resid_files[name] += contam
+                else:
+                    inst_preserved += len(matched_inst)
     R["privacy"] = {
         "channels_scanned": len(channels),
         "independent_identity_values_from_input": len(ident),
+        "institutional_entities_distinguished": inst_preserved,
         "residual_pattern_hits": dict(pat),
         "files_with_residue": len(resid_files),
     }
@@ -467,13 +540,19 @@ def audit(inp: Path, out: Path) -> dict:
         "FAIL" if pat else ("PASS" if channels else "SKIPPED"),
         len(channels) - len(resid_files),
         len(channels),
-        "Zero identifier hits across decoded sanitized, key, metadata, and filename channels",
+        "Zero identifier hits across decoded sanitized, key, metadata, and filename channels (with institutional role separation)",
     )
 
-    # ---------------- B. Field/occurrence-aware clinical & temporal integrity
+    # ---------------- B. Field/occurrence-aware clinical & role-aware temporal integrity
     kept_cat = Counter()
     tot_cat = Counter()
     t_ok = t_fail = t_skip = t_inconc = 0
+    note_t_ok = note_t_fail = 0
+    recs_by_file: dict[str, list[dict]] = {}
+    for r in recs:
+        recs_by_file.setdefault(r["file"], []).append(r)
+    in_parsed_cache: dict[str, _ParsedOutputFile] = {}
+    patient_deltas: dict[str, set[int]] = {}
     for p, e in used_entries:
         if not e or e.get("status") != "sanitized":
             continue
@@ -488,9 +567,46 @@ def audit(inp: Path, out: Path) -> dict:
             tot_cat[label] += icnt
             kept_cat[label] += min(icnt, out_counts.get((label, expr), 0))
 
-        # Temporal preservation across notes & JSON/FHIR units (count SKIPPED / INCONCLUSIVE explicitly)
-        if p.suffix.lower() in (".txt", ".json"):
-            di, do = dates_in(it), dates_in(pf.text)
+        # Infer date order (DMY vs MDY) on full file before stripping DOB roles
+        file_mdy = _infer_mdy(it) or _infer_mdy(pf.text)
+        suf = p.suffix.lower()
+        if suf in (".json", ".csv", ".tsv", ".jsonl", ".ndjson"):
+            file_recs = recs_by_file.get(out_rel, [])
+            if file_recs:
+                ipf = in_parsed_cache.get(out_rel)
+                if ipf is None:
+                    ipf = _ParsedOutputFile(p, raw_decode=True)
+                    in_parsed_cache[out_rel] = ipf
+                for rec in file_recs:
+                    in_txt, ok_in = ipf.resolve_record(str(rec.get("loc", "")), skip_dob=True)
+                    out_txt, ok_out = pf.resolve_record(str(rec.get("out") or rec.get("loc") or ""), skip_dob=True)
+                    if not (ok_in and ok_out):
+                        continue
+                    di = dates_in(_DOB_LINE.sub("", in_txt), mdy=file_mdy)
+                    do = dates_in(_DOB_LINE.sub("", out_txt), mdy=file_mdy)
+                    if len(di) == 1 and len(do) == 1 and rec.get("patient"):
+                        o1, o2 = ordinal(di[0]), ordinal(do[0])
+                        if o1 is not None and o2 is not None:
+                            patient_deltas.setdefault(str(rec["patient"]), set()).add(o2 - o1)
+                    elif len(di) >= 2:
+                        if len(di) != len(do):
+                            t_inconc += 1
+                        else:
+                            oi = [ordinal(d) for d in di]
+                            oo = [ordinal(d) for d in do]
+                            if None in oi or None in oo:
+                                t_inconc += 1
+                            else:
+                                deltas = {oo[k] - oi[k] for k in range(len(oi))}
+                                if len(deltas) == 1:
+                                    t_ok += 1
+                                    if rec.get("patient"):
+                                        patient_deltas.setdefault(str(rec["patient"]), set()).update(deltas)
+                                else:
+                                    t_fail += 1
+        elif suf in (".txt", ".md", ".hl7", ".er7", ".log", ".note", ".text"):
+            di = dates_in(_DOB_LINE.sub("", it), mdy=file_mdy)
+            do = dates_in(_DOB_LINE.sub("", pf.text), mdy=file_mdy)
             if len(di) < 2:
                 t_skip += 1
             elif len(di) != len(do):
@@ -503,22 +619,30 @@ def audit(inp: Path, out: Path) -> dict:
                 else:
                     if all((oi[k] - oi[0]) == (oo[k] - oo[0]) for k in range(len(oi))):
                         t_ok += 1
+                        note_t_ok += 1
                     else:
                         t_fail += 1
+                        note_t_fail += 1
+
+    cross_ok = sum(1 for ds in patient_deltas.values() if len(ds) == 1)
+    cross_fail = sum(1 for ds in patient_deltas.values() if len(ds) > 1)
+    t_fail += cross_fail
 
     tot_clin = sum(tot_cat.values())
     kept_clin = sum(kept_cat.values())
     clin_pct = round(100 * kept_clin / tot_clin, 2) if tot_clin else None
     t_eligible = t_ok + t_fail
+    note_eligible = note_t_ok + note_t_fail
     R["clinical"] = {
         "protected_values": {k: f"{kept_cat[k]}/{tot_cat[k]}" for k in tot_cat},
         "protected_values_kept_pct": clin_pct if clin_pct is not None else 0.0,
         "occurrence_totals": f"{kept_clin}/{tot_clin}",
-        "notes_with_intervals_preserved": f"{t_ok}/{t_eligible}" if t_eligible else f"0/0 (skipped:{t_skip}, inconclusive:{t_inconc})",
+        "notes_with_intervals_preserved": f"{note_t_ok}/{note_eligible}" if note_eligible else f"0/0 (skipped:{t_skip}, inconclusive:{t_inconc})",
     }
     R["temporal"] = {
         "intervals_passed": t_ok,
         "intervals_failed": t_fail,
+        "cross_record_patient_chronology": f"{cross_ok}/{cross_ok + cross_fail}" if (cross_ok + cross_fail) else "0/0 (N/A)",
         "skipped_under_2_dates": t_skip,
         "inconclusive_unparseable_or_count_mismatch": t_inconc,
         "fhir_dates_valid": f"{fhir_dates_ok}/{fhir_dates_tot}" if fhir_dates_tot else "0/0 (N/A)",
@@ -530,7 +654,7 @@ def audit(inp: Path, out: Path) -> dict:
             f"(occurrence-aware multiset check)"
         )
     if t_fail:
-        R["residual_risks"].append(f"{t_fail} document date interval checks failed chronological offset preservation")
+        R["residual_risks"].append(f"{t_fail} document/patient date interval checks failed chronological offset preservation")
 
     R["checks"]["clinical"] = _make_check(
         "SKIPPED" if tot_clin == 0 else ("PASS" if lost == 0 else "FAIL"),
@@ -539,12 +663,12 @@ def audit(inp: Path, out: Path) -> dict:
         "Occurrence-aware preservation of medications, doses, frequencies, BP, labs, ICD-10, and staff",
     )
     R["checks"]["temporal"] = _make_check(
-        "PASS" if (t_eligible > 0 and t_fail == 0 and fhir_dates_ok == fhir_dates_tot)
+        "PASS" if ((t_eligible + cross_ok) > 0 and t_fail == 0 and fhir_dates_ok == fhir_dates_tot)
         else ("FAIL" if (t_fail > 0 or fhir_dates_ok < fhir_dates_tot)
               else ("INCONCLUSIVE" if t_inconc > 0 else "SKIPPED")),
-        t_ok + fhir_dates_ok,
-        t_eligible + fhir_dates_tot,
-        f"Temporal interval & FHIR date checks (skipped={t_skip}, inconclusive={t_inconc})",
+        t_ok + cross_ok + fhir_dates_ok,
+        t_eligible + cross_ok + fhir_dates_tot,
+        f"Per-record & cross-record role-aware temporal + FHIR date checks (skipped={t_skip}, inconclusive={t_inconc})",
     )
 
     # ---------------- C. Record-level identity verification (exact loc/out resolution)
@@ -590,6 +714,15 @@ def audit(inp: Path, out: Path) -> dict:
         "Exact record-level (CSV row / RFC 6901 pointer / doc) pseudonym placement check",
     )
 
+    statuses = [c["status"] for c in R["checks"].values()]
+    if "FAIL" in statuses:
+        R["verdict"] = "FAIL"
+    elif "INCONCLUSIVE" in statuses or "WARNING" in statuses or R["residual_risks"]:
+        R["verdict"] = "WARNING"
+    elif "PASS" in statuses:
+        R["verdict"] = "PASS"
+    else:
+        R["verdict"] = "SKIPPED"
     R["engine"] = {"timing_s": rep.get("timing", {}).get("seconds"), "peak_rss_mb": rep.get("resources", {}).get("peak_rss_mb")}
     R["audit_seconds"] = round(time.monotonic() - t0, 2)
     return R
@@ -603,12 +736,13 @@ def render_html(R: dict, metrics: dict | None) -> str:
         ) + "</table>"
 
     sec = [
+        ("Summary · Release Verdict", {"assurance_version": R.get("assurance_version", "3.0"), "verdict": R.get("verdict", "SKIPPED")}),
         ("E · Structural Integrity", R["structural"]),
         ("A · Privacy Residue (Independent Decoded Channels)", R["privacy"]),
         ("B · Field/Occurrence Clinical Integrity", R["clinical"]),
-        ("C · Temporal & FHIR Chronology", R.get("temporal", {})),
+        ("C · Role-Aware Temporal & FHIR Chronology", R.get("temporal", {})),
         ("D · Record-Level Identity Integrity", R["identity"]),
-        ("Assurance 2.0 Check States", {k: f"{v['status']} ({v['coverage']})" for k, v in R.get("checks", {}).items()}),
+        ("Assurance 3.0 Check States", {k: f"{v['status']} ({v['coverage']})" for k, v in R.get("checks", {}).items()}),
         ("Engine Resources", R["engine"]),
     ]
     risks = "".join(f"<li>{html.escape(x)}</li>" for x in R["residual_risks"]) or "<li>No residual risks flagged by these checks.</li>"

@@ -265,10 +265,11 @@ def _one_edit(x: str, y: str) -> bool:
 
 
 class Linker:
-    def __init__(self, evidences: list[dict]):
+    def __init__(self, evidences: list[dict], release: bool = False):
         self.ev = evidences
         self.cl = [Cluster(i, e) for i, e in enumerate(evidences)]
         self.parent = list(range(len(evidences)))
+        self._release = release
 
     def find(self, i: int) -> int:
         while self.parent[i] != i:
@@ -293,21 +294,46 @@ class Linker:
     def run(self) -> list[int]:
         n = len(self.ev)
         # ---- rule 1: strong identifiers (most specific first), then shared phones.
-        # Re-run after rule 2: a union refused against a partial cluster may become
-        # admissible once that cluster is complete (every union still passes compatible()).
-        by_id = defaultdict(list)
+        # Scalar-first storage keeps singleton IDs as int (avoiding millions of 1-elem lists).
+        by_id: dict[str, int | list[int]] = {}
+        by_ph: dict[str, int | list[int]] = {}
         for i, e in enumerate(self.ev):
             for x in e["ids"]:
-                by_id[x].append(i)
-        id_order = sorted(by_id, key=lambda k: ({"A": 0, "B": 0, "N": 1, "I": 2, "E": 2, "M": 3}.get(k[0], 4), k))
-        by_ph = defaultdict(list)
-        for i, e in enumerate(self.ev):
+                cur = by_id.get(x)
+                if cur is None:
+                    by_id[x] = i
+                elif isinstance(cur, int):
+                    by_id[x] = [cur, i]
+                else:
+                    cur.append(i)
             for p in e["phones"]:
-                by_ph[p].append(i)
+                cur = by_ph.get(p)
+                if cur is None:
+                    by_ph[p] = i
+                elif isinstance(cur, int):
+                    by_ph[p] = [cur, i]
+                else:
+                    cur.append(i)
+            if self._release:
+                e["names"] = ()
+                e["rel"] = ()
+                e["village"] = None
+                e["date"] = None
+        self.ev = []
+
+        id_order = sorted(
+            (k for k, v in by_id.items() if isinstance(v, list)),
+            key=lambda k: ({"A": 0, "B": 0, "N": 1, "I": 2, "E": 2, "M": 3}.get(k[0], 4), k),
+        )
+        by_id_multi = {k: by_id[k] for k in id_order}
+        del by_id
+        ph_order = sorted(k for k, v in by_ph.items() if isinstance(v, list))
+        by_ph_multi = {k: by_ph[k] for k in ph_order}
+        del by_ph
 
         def strong_pass():
             for x in id_order:
-                idx = by_id[x]
+                idx = by_id_multi[x]
                 if len(idx) > 250:
                     continue
                 reps: list[int] = []
@@ -316,8 +342,8 @@ class Linker:
                         rj = self.find(j)
                         if rj not in reps:
                             reps.append(rj)
-            for p in sorted(by_ph):
-                idx = by_ph[p]
+            for p in ph_order:
+                idx = by_ph_multi[p]
                 if len(idx) > 250:
                     continue
                 reps = []
@@ -332,102 +358,138 @@ class Linker:
         strong_pass()
         # ---- rule 2: Fellegi-Sunter-inspired evidence scoring with term-frequency weights,
         # only accepting when a candidate clears threshold AND leads the runner-up by a clear margin.
-        for _ in range(2):
-            roots = sorted({self.find(i) for i in range(n)})
-            n_roots = max(2, len(roots))
-            tok_df = Counter()
-            index = defaultdict(set)
-            sec_idx = defaultdict(set)
-            root_toks: dict[int, set[str]] = {}
-            for r in roots:
-                c = self.cl[r]
-                seen_r = set()
-                for nk in c.names:
-                    for t in set(nk):
-                        if len(t) >= 2:
-                            index[t].add(r)
-                            seen_r.add(t)
-                root_toks[r] = seen_r
-                for t in seen_r:
-                    tok_df[t] += 1
-                for dob in c.dobs:
-                    sec_idx[("D", dob)].add(r)
-                for v in c.villages:
-                    sec_idx[("V", v)].add(r)
-                for rt in c.rels:
-                    if rt:
-                        sec_idx[("R", rt[0])].add(r)
-            for r in roots:
-                if self.find(r) != r:
-                    continue
-                c = self.cl[r]
-                c_toks = root_toks.get(r)
-                if not c_toks or not (c.dobs or c.villages or c.rels):
-                    continue
-                sec_cands = set()
-                for dob in c.dobs:
-                    bkt = sec_idx[("D", dob)]
-                    if len(bkt) <= 250:
-                        sec_cands |= bkt
-                for v in c.villages:
-                    bkt = sec_idx[("V", v)]
-                    if len(bkt) <= 250:
-                        sec_cands |= bkt
-                for rt in c.rels:
-                    if rt:
-                        bkt = sec_idx[("R", rt[0])]
-                        if len(bkt) <= 250:
+        if any(c is not None and (c.dobs or c.villages or c.rels) for c in self.cl):
+            for _ in range(2):
+                roots = sorted({self.find(i) for i in range(n)})
+                n_roots = max(2, len(roots))
+                tok_df: Counter = Counter()
+                sec_idx: dict[tuple[str, str], int | set[int]] = {}
+                root_toks: dict[int, set[str]] = {}
+                sec_roots = []
+                for r in roots:
+                    c = self.cl[r]
+                    if not c.names:
+                        continue
+                    seen_r = {t for nk in c.names for t in nk if len(t) >= 2}
+                    if not seen_r:
+                        continue
+                    for t in seen_r:
+                        tok_df[t] += 1
+                    if not (c.dobs or c.villages or c.rels):
+                        continue
+                    root_toks[r] = seen_r
+                    sec_roots.append(r)
+                    for dob in c.dobs:
+                        key = ("D", dob)
+                        b = sec_idx.get(key)
+                        if b is None:
+                            sec_idx[key] = r
+                        elif isinstance(b, int):
+                            if b != r:
+                                sec_idx[key] = {b, r}
+                        else:
+                            b.add(r)
+                    for v in c.villages:
+                        key = ("V", v)
+                        b = sec_idx.get(key)
+                        if b is None:
+                            sec_idx[key] = r
+                        elif isinstance(b, int):
+                            if b != r:
+                                sec_idx[key] = {b, r}
+                        else:
+                            b.add(r)
+                    for rt in c.rels:
+                        if rt:
+                            key = ("R", rt[0])
+                            b = sec_idx.get(key)
+                            if b is None:
+                                sec_idx[key] = r
+                            elif isinstance(b, int):
+                                if b != r:
+                                    sec_idx[key] = {b, r}
+                            else:
+                                b.add(r)
+
+                if not sec_roots:
+                    break
+                tok_index: dict[str, set[int]] | None = None
+                for r in sec_roots:
+                    if self.find(r) != r:
+                        continue
+                    c = self.cl[r]
+                    c_toks = root_toks.get(r)
+                    if not c_toks:
+                        continue
+                    sec_cands = set()
+                    for dob in c.dobs:
+                        bkt = sec_idx.get(("D", dob))
+                        if isinstance(bkt, set) and len(bkt) <= 250:
                             sec_cands |= bkt
-                if len(sec_cands) <= 1 and (not sec_cands or r in sec_cands):
-                    continue
-                if len(sec_cands) > 64:
-                    name_cands = set()
-                    for t in c_toks:
-                        name_cands |= index.get(t, ())
-                    cand_roots = sec_cands & name_cands
-                else:
-                    cand_roots = sec_cands
-                if len(cand_roots) > 250:
-                    continue
-                scored = []
-                seen_o = {r}
-                for o in sorted(cand_roots):
-                    o = self.find(o)
-                    if o in seen_o:
+                    for v in c.villages:
+                        bkt = sec_idx.get(("V", v))
+                        if isinstance(bkt, set) and len(bkt) <= 250:
+                            sec_cands |= bkt
+                    for rt in c.rels:
+                        if rt:
+                            bkt = sec_idx.get(("R", rt[0]))
+                            if isinstance(bkt, set) and len(bkt) <= 250:
+                                sec_cands |= bkt
+                    if len(sec_cands) <= 1:
                         continue
-                    seen_o.add(o)
-                    d = self.cl[o]
-                    if not d.names:
+                    if len(sec_cands) > 64:
+                        if tok_index is None:
+                            tok_index = defaultdict(set)
+                            for rr, rtoks in root_toks.items():
+                                for t in rtoks:
+                                    tok_index[t].add(rr)
+                        name_cands = set()
+                        for t in c_toks:
+                            name_cands |= tok_index.get(t, ())
+                        cand_roots = sec_cands & name_cands
+                    else:
+                        cand_roots = sec_cands
+                    if len(cand_roots) > 250:
                         continue
-                    d_toks = root_toks.get(o) or {t for nk in d.names for t in nk if len(t) >= 2}
-                    shared = c_toks & d_toks
-                    if not shared:
-                        continue
-                    rel_m = _rel_match(c.rels, d.rels)
-                    dob_m = bool(c.dobs & d.dobs)
-                    vill_m = (bool(c.villages & d.villages) and c.ages and d.ages and _ages_ok(c, d))
-                    if not (dob_m or rel_m or vill_m):
-                        continue
-                    if not compatible(c, d):
-                        continue
-                    idf = sum(min(3.5, math.log2(n_roots / max(1, tok_df[t]))) for t in shared)
-                    fs = idf
-                    if dob_m:
-                        fs += 4.5
-                    if rel_m:
-                        fs += 4.5 if rel_m == 2 else 3.0
-                    if vill_m:
-                        fs += 3.5
-                    if c.genders and d.genders and (c.genders & d.genders):
-                        fs += 0.5
-                    if c.ages and d.ages and min(abs(x - y) for x in c.ages for y in d.ages) <= 1:
-                        fs += 0.5
-                    scored.append((fs, o))
-                scored.sort(reverse=True)
-                if len(scored) == 1:
-                    self.union(r, scored[0][1])
-                elif len(scored) > 1 and os.environ.get("RAKSHAK_P_FS_TIEBREAK", "on") != "off":
-                    if scored[0][0] - scored[1][0] >= 2.0:
+                    scored = []
+                    seen_o = {r}
+                    for o in sorted(cand_roots):
+                        o = self.find(o)
+                        if o in seen_o:
+                            continue
+                        seen_o.add(o)
+                        d = self.cl[o]
+                        if not d.names:
+                            continue
+                        d_toks = root_toks.get(o) or {t for nk in d.names for t in nk if len(t) >= 2}
+                        shared = c_toks & d_toks
+                        if not shared:
+                            continue
+                        rel_m = _rel_match(c.rels, d.rels)
+                        dob_m = bool(c.dobs & d.dobs)
+                        vill_m = (bool(c.villages & d.villages) and c.ages and d.ages and _ages_ok(c, d))
+                        if not (dob_m or rel_m or vill_m):
+                            continue
+                        if not compatible(c, d):
+                            continue
+                        idf = sum(min(3.5, math.log2(n_roots / max(1, tok_df[t]))) for t in shared)
+                        fs = idf
+                        if dob_m:
+                            fs += 4.5
+                        if rel_m:
+                            fs += 4.5 if rel_m == 2 else 3.0
+                        if vill_m:
+                            fs += 3.5
+                        if c.genders and d.genders and (c.genders & d.genders):
+                            fs += 0.5
+                        if c.ages and d.ages and min(abs(x - y) for x in c.ages for y in d.ages) <= 1:
+                            fs += 0.5
+                        scored.append((fs, o))
+                    scored.sort(reverse=True)
+                    if len(scored) == 1:
                         self.union(r, scored[0][1])
+                    elif len(scored) > 1 and os.environ.get("RAKSHAK_P_FS_TIEBREAK", "on") != "off":
+                        if scored[0][0] - scored[1][0] >= 2.0:
+                            self.union(r, scored[0][1])
         strong_pass()
         return [self.find(i) for i in range(n)]
