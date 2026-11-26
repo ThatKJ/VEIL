@@ -4,6 +4,7 @@ age_band_years: 5              # base band width; every band always CONTAINS the
 date_shift_max_days: 180       # per-patient secret date shift (HMAC of RAKSHA_SECRET); intervals & stay lengths stay exact
 min_group_size: 5              # pooled-profile equivalence class below this -> escalate generalisation
 rare_condition_max_patients: 3 # a condition shared by <= this many patients is "rare" -> escalate that patient
-escalate_dob: drop             # escalated patients: DOB removed (birth year is the strongest re-identifier)
+escalate_dob: shift            # per-patient secret DOB shift preserves timeline intervals & FHIR birthDate syntax
+arx_k5_dist_drop: on           # ARX equivalence-class generalisation: drop district when k(dist,g,band5) < min_group_size
 pin_mode: drop                 # PIN codes removed (3-digit prefixes narrowed the register to ~1 candidate)
 consistent_bands: on           # one truthful band per patient across all records (no intersection leak)

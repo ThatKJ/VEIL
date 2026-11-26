@@ -14,21 +14,22 @@ from pathlib import Path
 
 from . import lexicon as L
 from . import privacy as P
-from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_DOCTOR, RX_EMAIL, RX_IDTOK, RX_PAN, _INDIC_DIGITS, Harvest, Rec,
-                     age_of, classify_digits, date_votes, decode, gender_of, id_digits_ok, looks_binary, norm, opaque,
-                     parse_date, pseudonym, shift_dates_in, sniff_delim, sniff_kind)
+from .engine import (DEVA, INDIC_DIG, RX_DIGITRUN, RX_DOCTOR, RX_DOTTED_PHONE, RX_EMAIL, RX_IDTOK, RX_PAN,
+                     _INDIC_DIGITS, Harvest, Rec, age_of, classify_digits, date_votes, decode, gender_of,
+                     id_digits_ok, looks_binary, norm, opaque, parse_date, pseudonym, shift_dates_in, sniff_delim,
+                     sniff_kind)
 from .linker import Linker
 from .scrub import NAME_VALUE, Masker
-from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_PRE_KIN, RX_VILL, Ctx,
-                    Sweeper, _name_ok, generalize_address, scrub_text)
-from .engine import clean_name_seq, DOB_RX, COMMON_WORDS
+from .scrub import (RX_HON_AFTER, RX_HON_BEFORE, RX_ID_LABEL, RX_KIN, RX_KIN_POSS, RX_LABEL, RX_NAME_ROLE,
+                    RX_PRE_KIN, RX_PRE_PAREN_KIN, RX_VILL, Ctx, Sweeper, _name_ok, generalize_address, scrub_text)
+from .engine import clean_name_seq, DOB_RX, COMMON_WORDS, NAME_SEQ
 
 UNSUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".xml", ".doc", ".docx", ".xls",
                ".xlsx", ".zip", ".gz", ".rar", ".7z", ".bin", ".exe", ".dcm", ".hl7", ".rtf", ".odt", ".ppt", ".pptx",
                ".heic", ".webp", ".mp3", ".mp4", ".wav"}
 ID_KINDS = {"MRN", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "PHONE"}
 STRUCT_KEYS = {"resourceType", "id", "fullUrl", "reference", "system", "url", "profile", "status", "type", "use",
-               "mode", "lastUpdated", "contentType", "language", "coding", "code", "unit", "versionId", "schema",
+               "mode", "contentType", "language", "coding", "code", "unit", "versionId", "schema",
                "loinc", "interpretation", "category", "intent", "priority", "valueQuantity", "comparator"}
 GENDER_TOK = {"gender", "sex", "sx", "ling", "लिंग"}
 DISTRICT_TOK = {"district", "distt", "jila", "jillo", "जिला", "ज़िला", "zila", "janpad"}
@@ -134,7 +135,7 @@ def shape_kind(values: list[str]) -> str | None:
 
 
 # ================================================================ evidence helpers
-def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None):
+def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, order: str = "dmy"):
     if v is None or v == "":
         return
     s = str(v).strip()
@@ -195,7 +196,8 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None):
             H.phones.add(d)
             e["phones"].add(d)
     elif kind == "DOB":
-        e["dob"] = s
+        d = parse_date(s, order if order in ("dmy", "mdy") else "dmy")
+        e["dob"] = d.isoformat() if d else s
     elif kind == "AGE":
         a = age_of(s)
         if a is not None:
@@ -217,6 +219,9 @@ COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "p
             "disease", "illness", "surgery", "operation", "rog", "बीमारी", "निदान"}
 
 
+_PAT_HON_RX = re.compile(rf"({NAME_SEQ})(\s+(?:ji|jee|sahab|saheb|sahib|didi|bhai|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chachaji|जी|साहब|दीदी|भाई|बहन))\b")
+
+
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     e = rec.ev
     for m in RX_ICD.finditer(text):
@@ -228,7 +233,7 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
             H.add_name(" ".join(toks))
             if first_label is None:
                 first_label = toks
-    for m in RX_HON_AFTER.finditer(text):
+    for m in _PAT_HON_RX.finditer(text):
         toks = clean_name_seq(m.group(1))
         if _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
             H.add_name(" ".join(toks))
@@ -239,12 +244,34 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         if _name_ok(toks):
             H.add_name(" ".join(toks))
     if not first_label:
-        for m in RX_PRE_KIN.finditer(text):
-            toks = clean_name_seq(m.group(1))
-            if _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
+        for rx_k in (RX_PRE_KIN, RX_PRE_PAREN_KIN):
+            for m in rx_k.finditer(text):
+                if rx_k is RX_PRE_PAREN_KIN and "." in m.group(1):
+                    continue
+                toks = clean_name_seq(m.group(1))
+                if not (_name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))):
+                    continue
+                if rx_k is RX_PRE_PAREN_KIN:
+                    if toks[-1].lower() in ("attendant", "relative", "visitor", "guardian", "witness"):
+                        continue
+                    rtoks = clean_name_seq(m.group(2))
+                    if not (rtoks and _name_ok(rtoks) and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+                        continue
                 H.add_name(" ".join(toks))
                 first_label = toks
                 break
+            if first_label:
+                break
+    for m in RX_PRE_PAREN_KIN.finditer(text):
+        if "." in m.group(1):
+            continue
+        toks = clean_name_seq(m.group(1))
+        rtoks = clean_name_seq(m.group(2))
+        if (toks and _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0]))
+                and toks[-1].lower() not in ("attendant", "relative", "visitor", "guardian", "witness")
+                and rtoks and _name_ok(rtoks) and (rtoks[0][:1].isupper() or re.search(rf"[{DEVA}]", rtoks[0]))):
+            H.add_name(" ".join(rtoks))
+            e["rel"].append(rtoks)
     if first_label:
         e["names"].append(first_label)
         rec.is_patient = True
@@ -264,6 +291,11 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     for m in re.finditer(rf"(?i)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|[{DEVA}]+(?:\s+[{DEVA}]+)?)\s*\(\s*C/o\s*\)", text):
         toks = clean_name_seq(m.group(1))
         if toks and _name_ok(toks):
+            H.add_name(" ".join(toks))
+            e["rel"].append(toks)
+    for m in RX_NAME_ROLE.finditer(text):
+        toks = clean_name_seq(m.group(1))
+        if toks and _name_ok(toks) and (toks[0][:1].isupper() or re.search(rf"[{DEVA}]", toks[0])):
             H.add_name(" ".join(toks))
             e["rel"].append(toks)
     for m in RX_IDTOK.finditer(text):
@@ -291,12 +323,19 @@ def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
         elif k in ("AADHAAR", "ABHA"):
             e["ids"].add(("A:" if k == "AADHAAR" else "B:") + d)
             H.id_digits.add(d)
+    for m in RX_DOTTED_PHONE.finditer(text):
+        d = re.sub(r"\D", "", m.group(0).translate(_INDIC_DIGITS))
+        if len(d) >= 10:
+            e["phones"].add(d[-10:])
+            H.phones.add(d[-10:])
     for m in RX_EMAIL.finditer(text):
         e["ids"].add("E:" + m.group(0).lower())
     m = DOB_RX.search(text)
-    if m and parse_date(m.group(1), order):
-        e["dob"] = m.group(1)
-    m = re.search(rf"(?i)(?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|आयु|उम्र|उमर|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*([{INDIC_DIG}]{{1,3}})", text)
+    if m:
+        d = parse_date(m.group(1), order)
+        if d:
+            e["dob"] = d.isoformat()
+    m = re.search(rf"(?i)(?:\bAge(?:/(?:Sex|Gender|Sx|Jati))?|\bYrs?(?:/(?:Sex|Gender|Sx))?|(?:आयु|उम्र|उमर|वय)(?:/(?:लिंग|लिग|sex|gender|sx))?|\bUmar(?:/(?:Jati|Sx|Sex))?|\bUmra)\s*[:\-]?\s*([{INDIC_DIG}]{{1,3}})", text)
     if m:
         e["age"] = int(m.group(1).translate(_INDIC_DIGITS))
     m = re.search(r"(?i)\b\d{1,3}\s*(?:Yrs?|Y|years)?\s*/\s*([MF])\b|\b(?:Sex|Gender|Jati)\s*[:\-]\s*(Male|Female|M|F)\b|लिंग\s*[:\-]\s*(पुरुष|महिला)", text)
@@ -358,8 +397,14 @@ def _table_list(v) -> bool:
 
 
 def _pairs(v) -> bool:
-    return (isinstance(v, list) and v and all(isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)
-                                               and not isinstance(x[1], (dict, list)) for x in v))
+    if not (isinstance(v, list) and v and all(isinstance(x, list) and len(x) == 2 and isinstance(x[0], str) for x in v)):
+        return False
+    c0_known = sum(kind_of_key(x[0]) is not None for x in v[:12])
+    if any(isinstance(x[1], (dict, list)) for x in v):
+        return c0_known >= 2 or kind_of_key(v[0][0]) in ("NAME", "MRN")
+    if len(v) >= 2 and kind_of_key(v[0][1]) is not None and c0_known <= 1:
+        return False
+    return True
 
 
 def _ext_table(d: dict):
@@ -582,7 +627,7 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
             return
         if kind == "NAME" and not isinstance(obj, str):
             return
-        add_ev(rec, H, kind, obj)
+        add_ev(rec, H, kind, obj, order=order)
 
 
 def pass1(job: FileJob, H: Harvest):
@@ -710,7 +755,7 @@ def pass1(job: FileJob, H: Harvest):
                         if len(v) > 3:
                             text_evidence(v, r, H, job.order)
                     elif k not in ("DOCTOR", "DATE", "RELATION", "STRUCT"):
-                        add_ev(r, H, k, v)
+                        add_ev(r, H, k, v, order=job.order)
                         if k == "AGE" and isinstance(v, str):
                             gm = re.search(r"(?i)/\s*([MF])\b", v)
                             if gm:
@@ -890,7 +935,7 @@ class Rewriter:
                 out = []
                 for lab, val in obj:
                     ck = child_kind(lab, kind) if lab not in STRUCT_KEYS else "STRUCT"
-                    out.append([self.value(lab, None, ctx, rec), self.value(val, ck, ctx, rec)])
+                    out.append([self.value(lab, None, ctx, rec), self.walk(val, ck, ctx, rec, res_kind)])
                 return out
             return [self.walk(x, kind, ctx, rec, res_kind) for x in obj]
         return self.value(obj, kind, ctx, rec)

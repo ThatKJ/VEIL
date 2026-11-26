@@ -170,7 +170,8 @@ class RegressionTests(unittest.TestCase):
 
             san_fhir = json.loads((out1 / "sanitized" / "bundle.json").read_text(encoding="utf-8"))
             pat = san_fhir["entry"][0]["resource"]
-            self.assertNotIn("birthDate", pat)
+            self.assertRegex(pat["birthDate"], r"^\d{4}-\d{2}-\d{2}$")
+            self.assertNotEqual(pat["birthDate"], "1990-05-14")
 
             san_lab = json.loads((out1 / "sanitized" / "lab_panel.json").read_text(encoding="utf-8"))
             self.assertEqual(san_lab["panels"][0]["results"][0]["test"], "WBC")
@@ -194,6 +195,131 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(len(dob_pids), 2)
             self.assertTrue(all(dob_pids))
             self.assertEqual(len(set(dob_pids)), 1)
+
+    def test_phase8_hindi_slicing_kin_age_village_header_and_lastupdated(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out1, out2 = root / "input", root / "out1", root / "out2"
+            inp.mkdir()
+            (inp / "hi.txt").write_text(
+                "रोगी का नाम: श्री वोजिरा गुप्ता   आयु/लिंग: 9 वर्ष/म\n"
+                "पुत्री बीगन राजभर\n",
+                encoding="utf-8",
+            )
+            (inp / "rx.txt").write_text("Nm: Bheechoyel G.  Yr: 29  UHID BJS.24.12061\nPt: 30y | M\nमरीज़: (103 साल)\n", encoding="utf-8")
+            (inp / "reg.csv").write_text(
+                "UHID,Patient Name,Village/Mohalla,District,Age\n"
+                "BJS.24.12061,Bheechoyel G.,Rampur,Barabanki,29\n",
+                encoding="utf-8",
+            )
+            (inp / "meta_fhir.json").write_text(json.dumps({
+                "resourceType": "Bundle",
+                "type": "collection",
+                "meta": {"lastUpdated": "2026-09-05T10:00:00+05:30"},
+                "entry": [{"resource": {"resourceType": "Patient", "id": "p1", "name": [{"text": "Vojira Gupta"}]}}],
+            }), encoding="utf-8")
+            self._run_cli(inp, out1, secret="sec-p8-alpha-123456")
+            self._run_cli(inp, out2, secret="sec-p8-beta-654321")
+
+            hi = (out1 / "sanitized" / "hi.txt").read_text(encoding="utf-8")
+            self.assertNotIn("ुप्ता", hi)
+            self.assertNotIn("गुप्ता", hi)
+            self.assertIn("पुत्री [RELATIVE]", hi)
+            self.assertIn("0-9", hi)
+
+            rx = (out1 / "sanitized" / "rx.txt").read_text(encoding="utf-8")
+            self.assertIn("Yr: 20-29", rx)
+            self.assertIn("30-39y", rx)
+            self.assertIn("(85-119 साल)", rx)
+
+            reg = (out1 / "sanitized" / "reg.csv").read_text(encoding="utf-8")
+            self.assertTrue(reg.splitlines()[0].startswith("UHID,Patient Name,Village/Mohalla,District,Age"))
+
+            f1 = json.loads((out1 / "sanitized" / "meta_fhir.json").read_text(encoding="utf-8"))
+            f2 = json.loads((out2 / "sanitized" / "meta_fhir.json").read_text(encoding="utf-8"))
+            self.assertRegex(f1["meta"]["lastUpdated"], r"^\d{4}-\d{2}-\d{2}T10:00:00\+05:30$")
+            self.assertNotEqual(f1["meta"]["lastUpdated"], "2026-09-05T10:00:00+05:30")
+            self.assertNotEqual(f1["meta"]["lastUpdated"], f2["meta"]["lastUpdated"])
+
+    def test_phase8_nested_pairs_dotted_phone_and_deva_role(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "rpt.json").write_text(json.dumps({
+                "rpt": [
+                    ["Nm", "GOND Sogi Haajen"],
+                    ["UHID", "BJS.24.11585"],
+                    ["Ph#", "85880.61445"],
+                    ["res", [["TSH", "7.51", "mIU/L"]]],
+                ]
+            }), encoding="utf-8")
+            (inp / "ds_rel.txt").write_text(
+                "Patient: Sogi Haajen Gond\n"
+                "पोपुम ठाकुर (बेटा)\n"
+                "W/o Baasutij. Follow-up at 7d\n"
+                "Address: Tola Dhichir, Gali No. 16\n"
+                "Ph# 85880.61445\n",
+                encoding="utf-8",
+            )
+            self._run_cli(inp, out, secret="sec-pairs-123456")
+            rpt_out = json.loads((out / "sanitized" / "rpt.json").read_text(encoding="utf-8"))
+            keys_col = [row[0] for row in rpt_out["rpt"]]
+            self.assertEqual(keys_col, ["Nm", "UHID", "Ph#", "res"])
+            self.assertEqual(rpt_out["rpt"][3][1][0], ["TSH", "7.51", "mIU/L"])
+
+            ds = (out / "sanitized" / "ds_rel.txt").read_text(encoding="utf-8")
+            self.assertNotIn("पोपुम", ds)
+            self.assertIn("(बेटा)", ds)
+            self.assertIn("Follow-up", ds)
+            self.assertNotIn("Dhichir", ds)
+            self.assertNotIn("Gali No. 16", ds)
+
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(recs), 2)
+            self.assertTrue(all(r["patient"] for r in recs))
+            self.assertEqual(recs[0]["patient"], recs[1]["patient"])
+
+    def test_phase8_iso_dob_short_surname_and_paren_kin(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "hi_dob.csv").write_text(
+                "UHID,Name,DOB,Age\nAYU-H-12-0491,नापी झा,27 सितंबर 1951,74\n", encoding="utf-8"
+            )
+            (inp / "lab_init.csv").write_text(
+                "Specimen,Client,Ref No,Test,Result\nS1,N. Jha,AYU-H-12-0491,TSH,4.2\nS2,N. Jha,AYU-H-12-0491,HbA1c,6.1\n",
+                encoding="utf-8",
+            )
+            (inp / "card.json").write_text(json.dumps({
+                "pt": {"name": "Naapee Jha", "dob": "27.09.1951", "mrn": "AYU-H-12-0491"}
+            }), encoding="utf-8")
+            (inp / "note_pkin.txt").write_text(
+                "[22-Aug-25] mili: Godarosh (son of Mevish) - UTI followup.\n"
+                "14:00 - K/C/O Bell's palsy. Attendant (W/o Rajesh Verma) informed about diet.\n",
+                encoding="utf-8",
+            )
+            (inp / "opd_g.json").write_text(json.dumps({
+                "patient": {"name": "Godarosh Mandal", "relative": "Mevish Mandal", "mrn": "M-99102"}
+            }), encoding="utf-8")
+            self._run_cli(inp, out, secret="sec-link8-123456")
+
+            recs = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            jha_pids = [r["patient"] for r in recs if r["file"] in ("sanitized/hi_dob.csv", "sanitized/lab_init.csv", "sanitized/card.json")]
+            self.assertEqual(len(jha_pids), 4)
+            self.assertTrue(all(jha_pids))
+            self.assertEqual(len(set(jha_pids)), 1)
+
+            g_pids = [r["patient"] for r in recs if r["file"] in ("sanitized/note_pkin.txt", "sanitized/opd_g.json")]
+            self.assertEqual(len(g_pids), 2)
+            self.assertTrue(all(g_pids))
+            self.assertEqual(len(set(g_pids)), 1)
+            npk = (out / "sanitized" / "note_pkin.txt").read_text(encoding="utf-8")
+            self.assertNotIn("Godarosh", npk)
+            self.assertNotIn("Mevish", npk)
+            self.assertNotIn("Rajesh", npk)
+            self.assertIn("K/C/O Bell's palsy", npk)
 
 
 if __name__ == "__main__":

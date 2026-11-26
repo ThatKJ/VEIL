@@ -23,10 +23,12 @@ def days_for(key: str | None, max_days: int) -> int:
 
 
 def band_of(age: int, width: int) -> str:
+    if age < 0:
+        return "[AGE]"
     if width <= 1:
         return str(age)
     if age >= 85 and width >= 10:
-        return "85+"
+        return "85-119"
     lo = (age // width) * width
     return f"{lo}-{lo + width - 1}"
 
@@ -65,9 +67,11 @@ class Plan:
         fixed = self.bands.get((key, w))
 
         def f(age):
+            if age < 0:
+                return "[AGE]"
             if fixed and fixed[0] <= age <= fixed[1]:
                 if fixed[0] >= 85:
-                    return "85+"
+                    return "85-119"
                 return f"{fixed[0]}-{fixed[1]}"
             return band_of(age, w)
         return f
@@ -81,7 +85,11 @@ def _profile(members) -> dict:
     conds = set()
     for m in members:
         conds |= m.ev.get("conds", set())
-    birth = int(dobs[0][:4]) if dobs else None
+    birth = None
+    if dobs:
+        import re as _re
+        ym = _re.search(r"(?:19|20)\d{2}", dobs[0])
+        birth = int(ym.group(0)) if ym else None
     return {"g": g.most_common(1)[0][0] if g else None, "age": max(ages) if ages else None, "birth": birth,
             "dist": dist.most_common(1)[0][0] if dist else None, "conds": conds}
 
@@ -115,8 +123,9 @@ def _plan(groups, policy) -> Plan:
     if mode == "fixed":
         return Plan(default, {}, {"mode": mode})
 
-    esc_dob = "year_drop" if str(policy.get("escalate_dob", "drop")) == "drop" else "shift"
+    esc_dob = "year_drop" if str(policy.get("escalate_dob", "shift")) == "drop" else "shift"
     rare_dist = str(policy.get("rare_dist_mode", "drop"))
+    k5_dist = str(policy.get("arx_k5_dist_drop", "on")) == "on"
     rare_band = int(policy.get("rare_band", 10))
     k_min = int(policy.get("min_group_size", 5))
     rare_max = int(policy.get("rare_condition_max_patients", 3))
@@ -147,9 +156,9 @@ def _plan(groups, policy) -> Plan:
         elif cells5n[cell(p, base_band, False)] >= k_min:
             rules[key] = Rule(band=base_band, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_birth")
         elif cells10[cell(p, 10, False)] >= k_min:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_band")
+            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist=(rare_dist if k5_dist else "keep"), reason="k_band")
         elif cells10[cell(p, 10, False)] >= 2:
-            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist="keep", reason="k_all")
+            rules[key] = Rule(band=10, dob=esc_dob, pin="drop", tehsil="drop", dist=(rare_dist if k5_dist else "keep"), reason="k_all")
         else:
             rules[key] = Rule(band=rare_band, dob=esc_dob, pin="drop", tehsil="drop", dist=rare_dist, reason="k_singleton")
         why[rules[key].reason] += 1

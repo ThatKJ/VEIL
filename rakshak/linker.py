@@ -40,7 +40,7 @@ def name_keys(tokens: list[str]) -> tuple[str, ...]:
             ks.append(tl)
             continue
         s = L.skel(_strip_fused_suffix(tl))
-        if len(s) >= 2:
+        if s and (len(s) >= 2 or len(tl) >= 2):
             ks.append(s)
     return tuple(ks)
 
@@ -76,7 +76,7 @@ def _initial_match(x: tuple[str, ...], y: tuple[str, ...]) -> bool:
     if len(x) < 2 or len(y) < 2:
         return False
     inits = [t for t in x[:-1] if len(t) == 1]
-    if not inits or x[-1] != y[-1] or len(x[-1]) < 2:
+    if not inits or x[-1] != y[-1] or not x[-1]:
         return False
     ym = [t for t in y[:-1] if len(t) >= 2]
     if not ym:
@@ -91,10 +91,9 @@ def _name_compatible(a: Cluster, b: Cluster) -> bool:
         for y in b.names:
             mx = {t for t in x if len(t) >= 2}
             my = {t for t in y if len(t) >= 2}
-            if mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx)
-                            or _initial_match(x, y) or _initial_match(y, x)):
+            if (mx & my and (x[0] == y[0] or (len(x[0]) >= 2 and x[0] in my) or (len(y[0]) >= 2 and y[0] in mx))) or _initial_match(x, y) or _initial_match(y, x):
                 return True
-            if x[0] == y[0] and len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1]:
+            if x[0] == y[0] and ((len(x) == 1 or len(y) == 1) or (len(x) >= 2 and len(y) >= 2 and x[-1] == y[-1])):
                 return True
     return False
 

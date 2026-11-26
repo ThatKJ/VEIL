@@ -390,13 +390,14 @@ RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|डॉ\.?|डा\.)\s*(?:[A-Z][a-zA
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"
 STOP_WORDS = {"age", "sex", "uhid", "ipd", "opd", "mobile", "address", "dob", "date", "ward", "bed", "dr", "dr.",
-              "consultant", "diagnosis", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र", "उमर", "उमिर", "वय",
+              "consultant", "diagnosis", "yr", "yrs", "years", "male", "female", "m", "f", "आयु", "वर्ष", "उम्र", "उमर", "उमिर", "वय",
               "लिंग", "पता", "ग्राम", "तारीख", "मोबाइल", "patient", "name", "hospital", "rx", "adv", "tab", "inj",
               "the", "and", "of", "on", "at", "in", "for", "with", "to", "is", "was", "no", "not", "nil", "na", "n/a",
               "phone", "tehsil", "distt", "district", "village", "pin", "reg", "attendant", "informed", "ka", "ki",
               "ke", "ne", "को", "का", "की", "के", "दा", "दे", "दी", "nu", "ni", "no", "है", "मरीज़", "मरीज", "he", "she", "his", "her", "patient's",
               "umar", "umra", "umir", "jati", "sx", "sarnamu", "rihaish", "रिहाइश", "dardi", "nidan", "fariyad",
-              "tapas", "riport", "dava", "din", "dakhal", "raja", "vali", "dikri", "patni", "puttar", "mr", "naam", "नाम"}
+              "tapas", "riport", "dava", "din", "dakhal", "raja", "vali", "dikri", "patni", "puttar", "mr", "naam", "नाम",
+              "follow", "followup", "follow-up"}
 COMMON_WORDS = {"fever", "pain", "patient", "hospital", "medicine", "ward", "bed", "doctor", "discharge", "summary",
                 "admission", "history", "diagnosis", "treatment", "advice", "review", "tab", "inj", "cap", "syp",
                 "normal", "stable", "date", "time", "report", "lab", "test", "result", "blood", "urine", "sugar",

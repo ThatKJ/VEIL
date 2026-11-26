@@ -106,7 +106,7 @@ def skel(token: str) -> str:
 
 
 # ---------------------------------------------------------------- name structure
-HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|aaji|babu|chacha|chachi|मैडम|जी|साहब|दीदी|भाई|बहन)"
+HONORIFIC_AFTER = r"(?:ji|jee|sahab|saheb|sahib|didi|bhai|bhaiya|ben|bai|bibi|amma|baba|paaji|kaka|bhau|tai|dada|dadi|aaji|babu|chacha|chachi|chachu|mama|mami|papa|mausi|fufa|bua|nana|nani|मैडम|जी|साहब|दीदी|भाई|बहन)"
 HONORIFIC_BEFORE = r"(?:Shri|Sri|Smt\.?|Shrimati|Kumari|Km\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Sh\.?|Late|Baby|Master|श्रीमान|श्री|श्रीमती|सुश्री|कुमारी|स्व\.?|सौ\.?|कै\.?|बीबी|रोगी|मरीज़|मरीज|রোগী)"
 GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bibi", "begum", "lal", "ram",
                        "prasad", "singh", "kaur", "shri", "shriman", "smt", "sahab", "didi", "bhai", "ben",
@@ -114,7 +114,7 @@ GENERIC_NAME_TOKENS = {"devi", "kumar", "kumari", "md", "mohd", "ji", "bai", "bi
                        "bhaiya", "amma",
                        "देवी", "कुमार", "कुमारी", "जी", "श्री", "श्रीमान", "श्रीमती", "बीबी"}
 
-KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|Dikri|Patni|Puttar|Vali|पुत्र|पुत्री|पत्नी|पति|पिता|माता|बेटा|बेटी|पुत्तर|धी|घरवाली|मुलगा|मुलगी|नवरा)"
+KIN = r"(?:S/O|D/O|W/O|F/O|M/O|(?<![A-Za-z]/)C/O|S\.O\.|D\.O\.|W\.O\.|Son of|Daughter of|Wife of|Husband of|Father|Mother|Husband|Wife|Guardian|Attendant|Dikri|Patni|Puttar|Vali|पुत्री|पुत्र|पत्नी|पति|पिता|माता|बेटा|बेटी|पुत्तर|धी|घरवाली|मुलगी|मुलगा|नवरा)"
 
 # Words that may follow "C/O" when it means "complaint of"
 COMPLAINT_WORDS = re.compile(
@@ -157,7 +157,7 @@ FIELD_RULES = [
     ("VILLAGE", r"village|gaon|gaanv|gam|gram|mupo|mohalla|locality|ग्राम|गाँव|गांव|पिंड|मोहल्ला|city|town|basti|ward_no"),
     ("ADDRESS", r"address\w*|addr|street|house|hno|line|pata|पता|makan|landmark|colony|sector|area|residence|sarnamu|rihaish|रिहाइश|thikana|ठिकाना"),
     ("DATE", r"date|dated|at|time|timestamp|tithi|तारीख|तिथि|tarikh|nondh|dakhal|raja|din|aail|admitted|discharged|collected|registered|on|"
-             r"period|start|end|issued|effective|recorded|authored|दाखला|रिलीज़|सुट्टी"),
+             r"period|start|end|issued|effective|recorded|authored|lastupdated|updated|created|दाखला|रिलीज़|सुट्टी"),
 ]
 FIELD_RX = [(k, re.compile(rf"(?:{p})", re.I)) for k, p in FIELD_RULES]
 
@@ -167,7 +167,7 @@ def key_tokens(key: str) -> list[str]:
     return [t for t in re.split(rf"[^0-9A-Za-z{DEVA}]+", k.lower()) if t]
 
 
-_DATE_TOK = re.compile(r"date|dated|tithi|तारीख|तिथि|dt", re.I)
+_DATE_TOK = re.compile(r"date|dated|tithi|तारीख|तिथि|dt|lastupdated|updated|timestamp", re.I)
 
 
 def classify_key(key: str) -> str | None:
@@ -175,7 +175,7 @@ def classify_key(key: str) -> str | None:
     joined = "".join(toks)
     if FIELD_RX[7][1].fullmatch(joined) or any(FIELD_RX[7][1].fullmatch(t) for t in toks):
         return "DOB"
-    if any(_DATE_TOK.fullmatch(t) for t in toks):
+    if _DATE_TOK.fullmatch(joined) or any(_DATE_TOK.fullmatch(t) for t in toks):
         return "DATE"
     if any(t in ("address", "addr", "pata", "पता", "residence") for t in toks):
         return "ADDRESS"
