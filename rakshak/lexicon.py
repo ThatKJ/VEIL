@@ -145,6 +145,7 @@ FIELD_RULES = [
                  r"broughtby|accompanied\w*|consenter|signatory|gdn|babuji|marad|mehraru|bhatar|baap|aai|vadil|vyakti|vyaktiyon|vyaktinaam|aagantuk|gawah|sakshi|parijan"),
     ("RELATION", r"relation|rel|relationship|रिश्ता|sambandh|relation_type"),
     ("DOCTOR", r"doctor\w*|dr|consultant\w*|physician\w*|surgeon\w*|referr\w*|referred|attending|treating|"
+               r"careteam|team|teams|nurses?|nursing_staff|roster|dutyroster|rota|anaesthetist\w*|intern\w*|resident_doctor|"
                r"nurse|staff|clerk|exportedby|practitioner|performer|author|signedby|verifiedby"),
     ("SAFE", r"hospital|facility|lab|department|dept|specialty|speciality|ward|bed|"
              r"diagnos\w*|icd\w*|condition|complaint\w*|history|procedure\w*|package\w*|drug\w*|medicin\w*|"

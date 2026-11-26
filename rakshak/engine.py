@@ -182,7 +182,7 @@ RX_ISO = re.compile(r"(?<![\d/.\-])((?:19|20)\d{2})([-/.])(\d{2})\2(\d{2})(?![\d
 RX_ISO8 = re.compile(r"(?<!\d)((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)")
 RX_TEXTD = re.compile(r"(?i)\b(\d{1,2})(st|nd|rd|th)?([\s\-/.]+)(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)"
                       r"(,?[\s\-/.]+)((?:19|20)?\d{2})\b")
-RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)[\s\-]+(\d{1,2})(st|nd|rd|th)?,?[\s\-]+((?:19|20)\d{2})\b")
+RX_TEXTM = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)([a-z]*\.?)([\s\-/]+)(\d{1,2})(st|nd|rd|th)?(,?[\s\-/]+)((?:19|20)\d{2})\b")
 
 
 def date_votes(text: str) -> tuple[int, int]:
@@ -272,7 +272,7 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
 
     def textm(m):
         mon = _MON.get(m.group(1).lower()[:3])
-        d = _mk(int(m.group(5)), mon, int(m.group(3)))
+        d = _mk(int(m.group(7)), mon, int(m.group(4)))
         if not d:
             return m.group(0)
         n = d + delta
@@ -280,8 +280,10 @@ def shift_dates_in(text: str, days: int, order: str, counter: list | None = None
         new_mon = _MON_FULL[n.month - 1]
         if len(name.rstrip(".")) <= 4:
             new_mon = new_mon[:3] + ("." if name.endswith(".") else "")
-        comma = "," if "," in m.group(0) else ""
-        return w(f"{new_mon} {n.day}{_ord(n.day) if m.group(4) else ''}{comma} {n.year}")
+        if name.isupper():
+            new_mon = new_mon.upper()
+        day = f"{n.day:02d}" if len(m.group(4)) == 2 else str(n.day)
+        return w(f"{new_mon}{m.group(3)}{day}{_ord(n.day) if m.group(5) else ''}{m.group(6)}{n.year}")
 
     def hid(m):
         d = _mk(int(m.group(3).translate(_INDIC_DIGITS)), _HI_MON[m.group(2)], int(m.group(1).translate(_INDIC_DIGITS)))
@@ -327,7 +329,7 @@ def parse_date(s: str, order: str) -> dt.date | None:
         return _mk(y, _MON[m.group(4).lower()[:3]], int(m.group(1)))
     m = RX_TEXTM.search(s)
     if m:
-        return _mk(int(m.group(5)), _MON[m.group(1).lower()[:3]], int(m.group(3)))
+        return _mk(int(m.group(7)), _MON[m.group(1).lower()[:3]], int(m.group(4)))
     m = RX_HID.search(s)
     if m:
         return _mk(int(m.group(3).translate(_INDIC_DIGITS)), _HI_MON[m.group(2)], int(m.group(1).translate(_INDIC_DIGITS)))
@@ -347,11 +349,23 @@ RX_IDTOK = re.compile(r"(?<![\w/\-:#])(?=[\w/\-:#]{0,40}\d{3})(?=[\w/\-:#]{0,40}
                       r"|(?<![\w.])[A-Za-z]{2,6}\.\d{2,4}\.\d{3,8}(?![\w.])")
 
 
+def _compact_timestamp(d: str) -> bool:
+    if len(d) not in (8, 10, 12, 14) or d[:2] not in ("19", "20"):
+        return False
+    y, mo, da = int(d[:4]), int(d[4:6]), int(d[6:8])
+    if not (1 <= mo <= 12 and 1 <= da <= 31):
+        return False
+    rest = d[8:]
+    return all(int(rest[i:i + 2]) < (24 if i == 0 else 60) for i in range(0, len(rest), 2))
+
+
 def classify_digits(run: str) -> str | None:
     run = run.translate(_INDIC_DIGITS)
     groups = [len(g) for g in re.findall(r"\d+", run)]
     d = re.sub(r"\D", "", run)
     n = len(d)
+    if groups and groups[0] >= 8 and _compact_timestamp(d[:groups[0]]):
+        return None                 # HL7-style YYYYMMDD[hhmm[ss]] timestamp, not an identifier
     if n == 14 and groups in ([14], [2, 4, 4, 4]):
         return "ABHA"
     if n == 12 and groups in ([12], [4, 4, 4]) and not (d.startswith("91") and d[2] in "6789" and groups != [4, 4, 4]):
@@ -364,9 +378,15 @@ def classify_digits(run: str) -> str | None:
     return None
 
 
+_MON_TOK = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
+RX_DATE_TOKEN = re.compile(rf"(?i){_MON_TOK}[\-/.]?\d{{1,2}}[\-/.,]?\s?(?:19|20)\d{{2}}|\d{{1,2}}[\-/.]?{_MON_TOK}[\-/.]?(?:19|20)?\d{{2}}")
+
+
 def id_digits_ok(tok: str) -> bool:
     digits = re.sub(r"\D", "", tok)
     if len(digits) < 4:
+        return False
+    if RX_DATE_TOKEN.fullmatch(tok) or _compact_timestamp(digits) and len(digits) == len(tok):
         return False
     if re.fullmatch(r"(?i)[A-Z]\d{2}(\.\d+)?", tok):      # ICD-10
         return False
@@ -385,7 +405,7 @@ CLIN_PROTECT = [
     re.compile(r"(?i)\bBed\s*(?:No\.?)?\s*\d+\b"),
     re.compile(r"\bASHA\b|(?i:\basha\s+(?:workers?|sahayika|facilitator))"),
 ]
-RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|डॉ\.?|डा\.)\s*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:\s+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
+RX_DOCTOR = re.compile(rf"(?:\bDr\.?|\bDR\.?|\bSr\.|\bSister|\bStaff\s+Nurse|\bNurse|\bANM|\bGNM|\bS/N|डॉ\.?|डा\.|सिस्टर)\s*(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)(?:\s+(?:[A-Z][a-zA-Z.']+|[{DEVA}]+)){{0,2}}")
 
 NAME_TOK = rf"(?:[A-Z][a-zA-Z'’]*\.?|[A-Z]{{2,}}|[{DEVA}]+\.?)"
 NAME_SEQ = rf"{NAME_TOK}(?:[ \t]{{1,2}}{NAME_TOK}){{0,3}}"

@@ -142,6 +142,8 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
     if not s:
         return
     e = rec.ev
+    if kind in ("NAME", "REL_NAME") and re.match(r"(?i)\s*(?:dr|sr|sister|nurse|staff\s+nurse|anm|gnm|s/n)\b\.?", s):
+        return                      # clinical staff, not a patient or relative
     if kind in ("NAME", "REL_NAME") and (len(re.sub(r"\D", "", s)) >= 3 or (RX_IDTOK.fullmatch(s) and id_digits_ok(s))):
         kind = "MRN" if kind == "NAME" else None      # an ID-shaped value is never a person name
         if kind is None:
@@ -538,6 +540,8 @@ def json_records(node, job, path=()):
     for k, item in parts:
         if not isinstance(item, (dict, list)):
             continue
+        if isinstance(k, str) and kind_of_key(k) == "DOCTOR":
+            continue          # staff / care-team sub-maps never own patient records
         subpath = path + (k,)
         if bearing and _direct_patient(item):
             yield subpath, item, None

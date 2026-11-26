@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>VEIL — Project Brief</title>
+<style>
+@page{size:A4;margin:11mm 12mm}
+body{font:8.6pt/1.32 "Helvetica Neue",Arial,sans-serif;color:#1b1b1b;margin:0}
+h1{font-size:15pt;margin:0 0 1pt} .tag{color:#555;font-size:9pt;margin-bottom:5pt}
+h2{font-size:10pt;margin:7pt 0 2pt;border-bottom:1px solid #ccc;padding-bottom:1pt}
+p{margin:2pt 0} ul{margin:2pt 0 2pt 14pt;padding:0} li{margin:1pt 0}
+table{border-collapse:collapse;width:100%;font-size:7.8pt;margin:3pt 0}
+th,td{border-bottom:1px solid #ddd;padding:1.5pt 3pt;text-align:left} th{background:#f3f3f3}
+pre{font:7.4pt/1.25 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;white-space:pre-wrap}
+.note{color:#555;font-size:7.6pt} .two{display:grid;grid-template-columns:1fr 1fr;gap:8pt}
+.pb{page-break-before:always}
+</style></head><body>
+<h1>VEIL — Verifiable Entity Integrity Layer</h1>
+<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python standard library · engine {{COMMIT}} · github.com/ThatKJ/VEIL</div>
+
+<h2>1. What VEIL is</h2>
+<p>VEIL is a clinical privacy <b>release-assurance</b> engine for fragmented, multilingual Indian hospital exports (CSV/TSV, nested JSON, JSON Lines,
+FHIR R4, free-text notes in Latin, Devanagari and Hinglish). It does not mask documents one at a time. It first resolves each patient's records
+across files, scripts and hospitals, then measures re-identification risk on the patient's <b>pooled</b> profile, which is the unit the attacker
+reconstructs, and generalises only the patients who stand out. An independent verification pass and a truth-free <b>Privacy Passport</b> audit check
+the release before it ships. No LLMs, no ML models, no network.</p>
+
+<h2>2. Architecture (two passes)</h2>
+<pre>input/ ─► 1 Ingest: encoding + dialect sniffing, depth/time budgets, symlink/binary/malformed quarantine (never copied raw)
+       ─► 2 Structure: field kinds from EN/HI/regional label lexicons + value shape; patient records at any depth
+            (nested arrays, keyed maps, header+rows, pairs); identifier-style schema keys never treated as names
+       ─► 3 Harvest: names / IDs / phones / places from structured fields + labelled, kinship, honorific and contextual cues
+       ─► 4 Identity graph: strong IDs and household-aware phones, then name skeleton (script-independent) + second clue,
+            accepted only with a clear margin; whole-cluster cannot-link (gender, DOB, age, national-ID conflicts,
+            tolerant of one-digit entry typos); passes re-run to a fixpoint; HMAC-SHA256 pseudonyms
+       ─► 5 Pooled-profile privacy: release-level equivalence classes + rare-condition / age≥80 escalation; truthful
+            per-patient consistent bands; per-patient secret date shifts (intervals and stay lengths exact)
+       ─► 6 Rewrite: clinical and doctor spans protected first; hidden channels (keys, headers, filenames, metadata, base64)
+       ─► 7 Verify: independent exact-substring sweep of harvested identifiers ─► sanitized/ + report.json + records.jsonl
+offline audit (not in runtime): tools/veil_passport.py — structural, privacy-residue, clinical/interval, identity checks</pre>
+
+<h2>3. Distinctive engineering (and what we adapted)</h2>
+<ul>
+<li><b>Pooled longitudinal privacy</b> — risk is assessed per resolved patient, not per record. Adapted from ARX's risk-driven anonymisation
+(attacker models on structured tables). Our contribution is applying it to pooled multilingual free text plus structured records offline.</li>
+<li><b>Zero-false-merge identity graph</b> — Fellegi–Sunter-style weighted evidence with term-frequency weights and blocking (inspired by
+Splink/Dedupe), plus whole-cluster cannot-link invariants so two plausible links cannot chain different people.</li>
+<li><b>Clinical-first scrubbing</b> — protected spans before redaction (Philter-style recall-first design; Presidio-style context cues).</li>
+<li><b>Release assurance</b> — an in-engine verification sweep, plus an offline Passport that audits a release with no ground truth.</li>
+</ul>
+
+{{RESULTS}}
+
+<h2>6. Security and compliance</h2>
+<ul><li>RAKSHA_SECRET is only an HMAC key and is never written. Pseudonyms, shifts and renamed keys/files are keyed and non-reversible.
+Output is deterministic per secret and changes with a different secret.</li>
+<li>Fail-safe: per-file time budget, bounded regexes, depth guard and symlink refusal. Anything unsafe is quarantined, never copied raw.
+Exports are contained inside sanitized/.</li>
+<li>Adversarial suite: {{TESTS}} unit/contract/fuzz/regression tests; 100k-row runs in about 11 s and under 0.7 GB; worst-case linkage scenarios with 0 false merges.</li></ul>
+
+<h2>7. Limitations (honest)</h2>
+<ul><li>All scores here are a <b>local re-implementation</b> of the published scorer and attacker on synthetic data. The official evaluator is sealed.
+No finite test proves anonymity, and defeating one attacker model does not prevent others.</li>
+<li>Escalated high-risk patients lose DOB and fine geography (district may be dropped for small classes): a measured privacy-over-utility trade-off.</li>
+<li>When a JSON <i>key</i> is itself PII (a map keyed by MRN or name), emitting the contract's input locator would leak it into records.jsonl. VEIL reports the
+nearest safe ancestor instead (no identity credit for those records), pending organiser clarification.</li>
+<li>Names with no structural or contextual cue can survive. The verifier only catches values harvested elsewhere in the release.</li></ul>
+</body></html>
