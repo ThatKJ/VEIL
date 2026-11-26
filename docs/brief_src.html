@@ -1,65 +1,78 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>VEIL — Project Brief</title>
 <style>
-@page{size:A4;margin:11mm 12mm}
-body{font:8.6pt/1.32 "Helvetica Neue",Arial,sans-serif;color:#1b1b1b;margin:0}
-h1{font-size:15pt;margin:0 0 1pt} .tag{color:#555;font-size:9pt;margin-bottom:5pt}
-h2{font-size:10pt;margin:7pt 0 2pt;border-bottom:1px solid #ccc;padding-bottom:1pt}
+@page{size:A4;margin:10mm 11mm}
+body{font:8.5pt/1.28 "Helvetica Neue",Arial,sans-serif;color:#1b1b1b;margin:0}
+h1{font-size:14.5pt;margin:0 0 1pt} .tag{color:#555;font-size:8.6pt;margin-bottom:4pt}
+h2{font-size:9.8pt;margin:6pt 0 2pt;border-bottom:1px solid #ccc;padding-bottom:1pt}
 p{margin:2pt 0} ul{margin:2pt 0 2pt 14pt;padding:0} li{margin:1pt 0}
-table{border-collapse:collapse;width:100%;font-size:7.8pt;margin:3pt 0}
+table{border-collapse:collapse;width:100%;font-size:7.6pt;margin:3pt 0}
 th,td{border-bottom:1px solid #ddd;padding:1.5pt 3pt;text-align:left} th{background:#f3f3f3}
-pre{font:7.4pt/1.25 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;white-space:pre-wrap}
-.note{color:#555;font-size:7.6pt} .two{display:grid;grid-template-columns:1fr 1fr;gap:8pt}
+td.num,th.num{text-align:right}
+pre{font:7.3pt/1.22 Menlo,monospace;background:#f6f6f6;padding:4pt;margin:3pt 0;white-space:pre-wrap}
+.note{color:#555;font-size:7.4pt} .two{display:grid;grid-template-columns:1fr 1fr;gap:8pt}
 .pb{page-break-before:always}
 </style></head><body>
 <h1>VEIL — Verifiable Entity Integrity Layer</h1>
-<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python standard library · engine {{COMMIT}} · github.com/ThatKJ/VEIL</div>
+<div class="tag">Track 3 · Secret Wards · <b>Hide the identity. Preserve the medicine.</b> · Offline · CPU-only · Python standard library · engine <code>70f77c8</code> (<code>known-good-7</code>) · github.com/ThatKJ/VEIL</div>
 
 <h2>1. What VEIL is</h2>
 <p>VEIL is a clinical privacy <b>release-assurance</b> engine for fragmented, multilingual Indian hospital exports (CSV/TSV, nested JSON, JSON Lines,
-FHIR R4, free-text notes in Latin, Devanagari and Hinglish). It does not mask documents one at a time. It first resolves each patient's records
-across files, scripts and hospitals, then measures re-identification risk on the patient's <b>pooled</b> profile, which is the unit the attacker
-reconstructs, and generalises only the patients who stand out. An independent verification pass and a truth-free <b>Privacy Passport</b> audit check
-the release before it ships. No LLMs, no ML models, no network.</p>
+FHIR R4, HL7 v2, Markdown/INI notes across Latin, Devanagari, Bengali, Gurmukhi, and Gujarati scripts). It does not mask documents one at a time. It first resolves each patient's records
+across files, scripts and hospitals, then measures re-identification risk on the patient's <b>pooled</b> profile, and escalates generalisation only for patients who stand out. An independent verifier and truth-free <b>Privacy Passport</b> audit check every release before it ships. Zero LLMs, zero ML models, zero network.</p>
 
 <h2>2. Architecture (two passes)</h2>
-<pre>input/ ─► 1 Ingest: encoding + dialect sniffing, depth/time budgets, symlink/binary/malformed quarantine (never copied raw)
-       ─► 2 Structure: field kinds from EN/HI/regional label lexicons + value shape; patient records at any depth
-            (nested arrays, keyed maps, header+rows, pairs); identifier-style schema keys never treated as names
-       ─► 3 Harvest: names / IDs / phones / places from structured fields + labelled, kinship, honorific and contextual cues
-       ─► 4 Identity graph: strong IDs and household-aware phones, then name skeleton (script-independent) + second clue,
-            accepted only with a clear margin; whole-cluster cannot-link (gender, DOB, age, national-ID conflicts,
-            tolerant of one-digit entry typos); passes re-run to a fixpoint; HMAC-SHA256 pseudonyms
-       ─► 5 Pooled-profile privacy: release-level equivalence classes + rare-condition / age≥80 escalation; truthful
-            per-patient consistent bands; per-patient secret date shifts (intervals and stay lengths exact)
-       ─► 6 Rewrite: clinical and doctor spans protected first; hidden channels (keys, headers, filenames, metadata, base64)
-       ─► 7 Verify: independent exact-substring sweep of harvested identifiers ─► sanitized/ + report.json + records.jsonl
-offline audit (not in runtime): tools/veil_passport.py — structural, privacy-residue, clinical/interval, identity checks</pre>
+<pre>input/ ─► 1 Ingest: encoding/mojibake + CleverCSV delimiter sniffing, depth/budget guards, symlink/binary/malformed quarantine
+       ─► 2 Structure: EN/HI/regional/Kannada lexicons + value shape; recursive JSON/array-table/KV/HL7 v2 discovery; bounded literal JSONL
+       ─► 3 Harvest: names, strong IDs, phones, DOB/ages, relatives, places; real-record rec_ids separated from metadata surrogates
+       ─► 4 Identity graph: strong IDs + household phones (up to 32 clusters), Indic skeleton + secondary-blocked Fellegi–Sunter;
+            whole-cluster cannot-link (one-edit ID typo tolerance); fixpoint passes; HMAC-SHA256 pseudonyms
+       ─► 5 Pooled-profile privacy: release equivalence classes (k5/k10) + rare-ICD/age≥80 escalation; consistent ARX bands; HMAC date shifts
+       ─► 6 Rewrite: clinical &amp; Dr./Sr./nurse spans protected first; hidden channels (JSON keys, filenames, HL7, base64, hex, URLs)
+       ─► 7 Verify: O(N) harvested-token sweep ─► sanitized/ (contained) + report.json + records.jsonl + offline Privacy Passport</pre>
 
-<h2>3. Distinctive engineering (and what we adapted)</h2>
+<h2>3. Distinctive engineering &amp; prior-art attribution</h2>
 <ul>
-<li><b>Pooled longitudinal privacy</b> — risk is assessed per resolved patient, not per record. Adapted from ARX's risk-driven anonymisation
-(attacker models on structured tables). Our contribution is applying it to pooled multilingual free text plus structured records offline.</li>
-<li><b>Zero-false-merge identity graph</b> — Fellegi–Sunter-style weighted evidence with term-frequency weights and blocking (inspired by
-Splink/Dedupe), plus whole-cluster cannot-link invariants so two plausible links cannot chain different people.</li>
-<li><b>Clinical-first scrubbing</b> — protected spans before redaction (Philter-style recall-first design; Presidio-style context cues).</li>
-<li><b>Release assurance</b> — an in-engine verification sweep, plus an offline Passport that audits a release with no ground truth.</li>
+<li><b>Pooled longitudinal privacy (adapted from ARX)</b> — risk is assessed per resolved patient, not per record, bringing risk-driven equivalence-class anonymisation to pooled multilingual free text plus structured records offline.</li>
+<li><b>Zero-false-merge identity graph (adapted from Splink &amp; Dedupe)</b> — Fellegi–Sunter blocking intersect + term-frequency weighting with whole-cluster cannot-link constraints and household-phone multi-cluster support.</li>
+<li><b>Clinical-first scrubbing &amp; dialect handling (UCSF Philter, Presidio, Nottingham i2b2, CleverCSV, Indic transliteration, FHIR R4)</b> — protects doses, labs, ICD-10 codes, doctors, and nurses first before rewriting PII.</li>
+<li><b>Truth-free Release Assurance (<code>tools/veil_passport.py</code>, dev/demo)</b> — independently audits structural integrity, privacy residue (incl. base64), clinical expression/interval preservation, and pseudonym placement without ground truth.</li>
 </ul>
 
-{{RESULTS}}
+<div class="pb"></div>
 
-<h2>6. Security and compliance</h2>
-<ul><li>RAKSHA_SECRET is only an HMAC key and is never written. Pseudonyms, shifts and renamed keys/files are keyed and non-reversible.
-Output is deterministic per secret and changes with a different secret.</li>
-<li>Fail-safe: per-file time budget, bounded regexes, depth guard and symlink refusal. Anything unsafe is quarantined, never copied raw.
-Exports are contained inside sanitized/.</li>
-<li>Adversarial suite: {{TESTS}} unit/contract/fuzz/regression tests; 100k-row runs in about 11 s and under 0.7 GB; worst-case linkage scenarios with 0 false merges.</li></ul>
+<h2>4. Measured results (local harness, frozen <code>70f77c8</code> / <code>known-good-7</code>, NOT official)</h2>
+<table>
+<thead><tr><th>Dataset</th><th>Split / Region</th><th class="num">Leaked</th><th class="num">Canaries</th><th class="num">Probes</th><th class="num">Link F0.5 (FM)</th><th class="num">Utility / Privacy</th><th class="num">Est. Total</th></tr></thead>
+<tbody>
+<tr><td><code>dev</code></td><td>Official practice</td><td class="num">0.0%</td><td class="num">0/4</td><td class="num">0.993</td><td class="num">0.9968 (0)</td><td class="num">0.946 / 0.869</td><td class="num"><b>92.30</b></td></tr>
+<tr><td><code>chaos_dev</code></td><td>Dev synthetic</td><td class="num">0.0%</td><td class="num">0/3</td><td class="num">0.987</td><td class="num">0.9935 (0)</td><td class="num">0.933 / 0.902</td><td class="num"><b>93.09</b></td></tr>
+<tr><td><code>chaos_holdout15</code></td><td>Bundelkhand/MP (opt)</td><td class="num">0.1%</td><td class="num">0/4</td><td class="num">1.000</td><td class="num">1.0000 (0)</td><td class="num">0.913 / 0.945</td><td class="num"><b>87.75</b></td></tr>
+<tr><td><code>chaos_holdout16</code></td><td>Punjab/Doaba (opt)</td><td class="num">0.1%</td><td class="num">0/4</td><td class="num">1.000</td><td class="num">0.9993 (0)</td><td class="num">0.918 / 0.947</td><td class="num"><b>85.62</b></td></tr>
+<tr><td><code>chaos_holdout17</code></td><td>Andhra/Rayalaseema (opt)</td><td class="num">0.3%</td><td class="num">0/4</td><td class="num">1.000</td><td class="num">0.9953 (0)</td><td class="num">0.916 / 0.959</td><td class="num"><b>93.06</b></td></tr>
+<tr><td><code>chaos_holdout18</code></td><td>Assam/Odisha+HL7 (opt)</td><td class="num">0.0%</td><td class="num">0/4</td><td class="num">1.000</td><td class="num">0.9897 (0)</td><td class="num">0.861 / 0.761</td><td class="num"><b>86.82</b></td></tr>
+<tr><td><code>chaos_holdout19</code></td><td>Karnataka+JSONL (opt)</td><td class="num">0.6%</td><td class="num">0/4</td><td class="num">0.949</td><td class="num">0.9882 (0)</td><td class="num">0.853 / 0.858</td><td class="num"><b>92.39</b></td></tr>
+<tr><td><code>chaos_holdout20</code></td><td><b>BLIND</b> (uninspected)</td><td class="num">5.9%</td><td class="num">3/4</td><td class="num">0.661</td><td class="num">0.9450 (0)</td><td class="num">0.777 / 0.717</td><td class="num"><b>68.38</b></td></tr>
+<tr><td><code>chaos_holdout21</code></td><td><b>BLIND</b> (uninspected)</td><td class="num">17.7%</td><td class="num">2/4</td><td class="num">0.985</td><td class="num">0.4315 (1485)</td><td class="num">0.781 / 0.547</td><td class="num"><b>42.64</b></td></tr>
+</tbody>
+</table>
+<p class="note"><b>Summary:</b> 7-set (<code>dev..H19</code>) mean = <b>90.15</b> (min 85.62, 0 false merges, 0/27 canaries, A7=0.000 across all 7). On uninspected blind <code>H20/H21</code>, <code>70f77c8</code> improved on <code>84db8d3</code> (<code>H21</code> 42.64 vs 38.74, leak 17.7% vs 28.3%, beating <code>kg5</code> 40.90 and <code>kg6</code> 40.73).</p>
 
-<h2>7. Limitations (honest)</h2>
-<ul><li>All scores here are a <b>local re-implementation</b> of the published scorer and attacker on synthetic data. The official evaluator is sealed.
-No finite test proves anonymity, and defeating one attacker model does not prevent others.</li>
-<li>Escalated high-risk patients lose DOB and fine geography (district may be dropped for small classes): a measured privacy-over-utility trade-off.</li>
-<li>When a JSON <i>key</i> is itself PII (a map keyed by MRN or name), emitting the contract's input locator would leak it into records.jsonl. VEIL reports the
-nearest safe ancestor instead (no identity credit for those records), pending organiser clarification.</li>
-<li>Names with no structural or contextual cue can survive. The verifier only catches values harvested elsewhere in the release.</li></ul>
+<h2>5. Privacy Passport &amp; Live Demo (measured on real outputs)</h2>
+<ul>
+<li><b>Truth-free Privacy Passport on official <code>dev</code> (<code>tools/veil_passport.py</code>):</b> 199/199 input files accounted, 194 exported, 6 quarantined, 0 parse failures, 16/16 tables row-count preserved; <b>0 residual identifier hits</b> across 197 scanned channels (383 independent input identity values); <b>100.0% protected clinical expressions</b> (695/695 doses, 138/138 BP, 108/108 labs, 480/480 frequencies, 216/216 ICD-10, 23/24 note intervals); 774/774 pseudonyms placed cleanly.</li>
+<li><b>End-to-end Live Demo on <code>chaos_dev</code> (<code>tools/veil_demo.py</code>):</b> Synthetic patient <code>PT00005</code> linked 21/21 across 17 files/3 scripts to <code>PSN-81FAPE</code>, homonyms kept distinct (<code>PSN-YRWD2D</code> vs <code>PSN-YWXMP4</code>), 107/109 medical values kept, adaptive policy reduced attacker <code>A4</code> re-ID <code>1.00 → 0.23</code>, and an injected raw phone + altered dose was flagged by the Passport and eliminated upon clean re-run.</li>
+</ul>
+
+<h2>6. Security, Scaling &amp; Honest Limitations</h2>
+<div class="two">
+<ul>
+<li><code>RAKSHA_SECRET</code> never touches disk/logs; A/A determinism 1.0, A/B shifts distinct; strict <code>is_relative_to(sanitized)</code> export containment; symlink escape &amp; >64-deep JSON quarantined.</li>
+<li><b>28/28 tests pass</b> (`unittest`, contract, offline blocked-socket, 5 MB ReDoS, Passport, strict `ast.literal_eval` bounds). 100k rows x 100k unique patients in <b>11.63s / 670.9 MB</b> (`0` quarantined).</li>
+</ul>
+<ul>
+<li>All local harness estimates exclude the sealed scaling sub-weight; no finite check proves anonymity outside the published attacker model.</li>
+<li>Uninspected blind sets <code>H20/H21</code> revealed unfamiliar scripts/formats where recall and canary coverage drop; left uninspected to preserve blind integrity. Local Docker daemon was inactive.</li>
+</ul>
+</div>
 </body></html>

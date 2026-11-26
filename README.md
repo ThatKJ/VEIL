@@ -48,20 +48,30 @@ VEIL integrates adapted, clean-room Python stdlib implementations of established
 * **CleverCSV** — unquoted multi-row structural consistency scoring for ambiguous CSV/TSV dialect detection.
 * **Indic rule-based transliteration & HL7 FHIR R4** — script-independent phonetic skeletons and schema-valid Bundle anonymisation.
 
-## Measured results (local harness, frozen code commit `e83ba90` / `known-good-5`, NOT the official evaluator)
+## Measured results (local harness, frozen engine commit `70f77c8` / `known-good-7`, NOT the official evaluator)
 
 Local re-implementation of the published scorer and attacker (`docs/SCORING.md`, `docs/ATTACKS.md`, full 3-run A/A/B evaluation). Because the official evaluator is sealed, numbers below are local estimates excluding the scaled sub-weight.
 
-| Dataset | Personal data leaked (`check_dev`) | Canaries | Medical kept | Link F0.5 / FM | Utility / Privacy | Est. total |
+| Dataset | Personal data leaked (`check_dev`) | Canaries | Medical kept (probes) | Link F0.5 / FM | Utility / Privacy | Est. total |
 |---|---:|---:|---:|---:|---:|---:|
-| official `dev` | 0.0% | 0 / 4 | 99.3% (probes) | 0.9968 / **0** | 0.9457 / 0.8692 | **92.30** |
-| `chaos_dev` | 0.0% | 0 / 3 | 99.4% (probes) | 0.9783 / **0** | 0.9278 / 0.9016 | **92.51** |
-| 5 validation holdouts (`H1..H5`) | 0.0–0.3% | **0 / 20** | 99.7–100% | 0.971–0.991 / **0** | 0.895–0.913 / 0.834–0.979 | **89.55–94.79** |
-| 3 unseen blind sets (`H15..H17`, Phase IX) | 0.4–1.7% | **0 / 12** | 99.96–99.97% | 0.720–0.986 / **0** | 0.822–0.909 / 0.946–0.959 | **78.69–92.62** (mean **86.24**) |
+| official `dev` | 0.0% | 0 / 4 | 99.3% | 0.9968 / **0** | 0.9458 / 0.8692 | **92.30** |
+| `chaos_dev` | 0.0% | 0 / 3 | 98.7% | 0.9935 / **0** | 0.9327 / 0.9017 | **93.09** |
+| `chaos_holdout15` (Bundelkhand) | 0.1% | 0 / 4 | 99.96% | 1.0000 / **0** | 0.9133 / 0.9454 | **87.75** |
+| `chaos_holdout16` (Punjab/Doaba) | 0.1% | 0 / 4 | 99.97% | 0.9993 / **0** | 0.9183 / 0.9471 | **85.62** |
+| `chaos_holdout17` (Andhra) | 0.3% | 0 / 4 | 99.96% | 0.9953 / **0** | 0.9163 / 0.9585 | **93.06** |
+| `chaos_holdout18` (Assam/Odisha + HL7) | 0.0% | 0 / 4 | 100.0% | 0.9897 / **0** | 0.8608 / 0.7614 | **86.82** |
+| `chaos_holdout19` (Karnataka + JS literals) | 0.6% | 0 / 4 | 94.9% | 0.9882 / **0** | 0.8529 / 0.8576 | **92.39** |
+| `chaos_holdout20` (**BLIND**, uninspected) | 5.9% | 3 / 4 | 66.1% | 0.9450 / **0** | 0.7768 / 0.7171 | **68.38** |
+| `chaos_holdout21` (**BLIND**, uninspected) | 17.7% | 2 / 4 | 98.5% | 0.4315 / 1,485 | 0.7806 / 0.5467 | **42.64** |
 
-* **Dev + validation 7-set mean:** **`92.33`** (`0` false merges, `PP = 1.0000`, `pseudonym_consistency = 1.0000`, `100.0%` Devanagari recall, `0/27` canaries).
-* **Blind head-to-head (`H15..H17`, Bundelkhand/MP, Punjab/Doaba, Andhra/Rayalaseema):** `known-good-5` (`e83ba90`, mean **`86.24`**, min `78.69`, max `92.62`) improved on every dataset over `known-good-4` (`c7300d4`, mean `86.16`), with **`0/12` canaries**, **`0` false merges**, **`1.0000` pseudonym consistency**, and **`0.000` A7 cross-secret risk** on all 3 sets.
-* **High-cardinality scaling (`scale_cardinality.py`, 2 CPUs):** `100,000 rows x 100,000 unique patients` in **`11.03s`** (`704.2 MB` peak RSS, `0` quarantined); `2,000` small files in **`1.19s`**. See `docs/brief.pdf` and `research/` for full tables.
+* **7-set (`dev`, `chaos_dev`, `H15..H19`) summary:** mean **`90.15`**, min `85.62`, **`0` false merges (`PP = 1.0000`)**, **`0/27` canaries**, **`1.0000` pseudonym consistency**, and `0.000` `A7` cross-secret risk on all 7 sets (reclaimed `+9.86` pts on `H18` over `84db8d3` and eliminated `H16`'s `rec_ret=0.63 -> 1.00` collapse).
+* **Strictly uninspected `H20/H21` comparison (`kg5` -> `kg6` -> `84db8d3` -> `70f77c8`):** On `H20`, `70f77c8` (`68.38`) matches `kg6` and beats `kg5` (`67.72`); on `H21`, `70f77c8` (`42.64`, `17.7%` leaked) beats `84db8d3` (`38.74`, `28.3%` leaked), `kg6` (`40.73`), and `kg5` (`40.90`).
+* **High-cardinality scaling (`scale_cardinality.py`, 2 CPUs):** `100,000 rows x 100,000 unique patients` in **`11.63s`** (`670.9 MB` peak RSS, `0` quarantined); `2,000` small files in **`1.40s`**. Worst-case linkage suite (`linkage_worstcase.py`, `W1..W5`): `0` false merges in `0.01–0.28s`.
+
+## Release Assurance & Demo (Dev/Demo Tools — Not Runtime)
+
+* **`tools/veil_passport.py`** runs a truth-free audit across four independent checks (`structural`, independent `privacy` residue including base64, `clinical` doses/BP/labs/ICD/intervals, and `identity` pseudonym placement). On official `dev`, the Passport measured `199/199` files accounted, **`0` residual pattern hits** across `197` channels, **`100.0%` protected clinical values** (`1637/1637`, intervals `23/24`), and **`774/774` pseudonyms placed**.
+* **`tools/veil_demo.py`** runs the live engine + local attacker end-to-end on synthetic `chaos_dev` (fragmented patient `PT00005`, `21/21` records linked to `PSN-81FAPE`, homonyms separated `PSN-YRWD2D` vs `PSN-YWXMP4`, `107/109` clinical values kept, `A4` reduced `1.00 -> 0.23` vs direct masking, plus injected defect caught by Passport and repaired).
 
 ## Models
 
@@ -70,7 +80,7 @@ None. Zero LLMs, zero transformers, zero pretrained weights, zero network calls.
 ## Known limitations
 
 * Resistance to re-identification is verified against the published attacker suite (`ATTACKS.md`); real-world or undisclosed attacks outside that model are not covered, and no finite test proves anonymity.
-* **Blind regional variance (`chaos_holdout16`):** On the unseen Punjab/Doaba synthetic corpus (`H16`), `record_retention` (`0.6294`) and `pairwise_recall` (`0.3396`) dropped relative to other sets while `PP = 1.0000` and `0` false merges held — highlighting harder unlabelled/punjabi name-style linkage and locator recovery when unseen regional syntax diverges.
-* **Coincidental numeric substrings:** Local `check_dev` / `evaluate.py` flags 1–10 ordinary numeric `leaked_identifiers` per set where shifted ISO dates, valid vitals (`BP 165/98`), or FHIR `urn:uuid` fragments share 4–5 digit substrings with MRNs.
-* **Targeted rare-disease + exact LOS (`A5`):** Intentionally preserved clinical truth (`ICD-10` + stay length) leaves unique diagnoses partially matchable (`0.00–0.64` rel. to raw).
-* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`21/21` unit/security/contract tests pass); local Docker daemon was inactive, so Linux container runtime is verified via CLI/contract and offline-socket isolation tests rather than a live Docker daemon.
+* **Unfamiliar format/script headroom (`chaos_holdout20`, `chaos_holdout21`):** Strictly uninspected blind holdouts `H20/H21` exposed unparsed/non-standard structures (`canaries 3/4` & `2/4`, `H21` `17.7%` leak and `1,485` false merges), left raw/uninspected to preserve blind integrity.
+* **Keyed maps with PII keys:** When a JSON map key itself is PII, emitting the input locator leaks PII into `records.jsonl`; VEIL renames those keys safely (`_SAFE_SURROGATE_KEY` + real-record `rec_ids` check) and falls back to the nearest safe ancestor (`patient: null`).
+* **Coincidental numeric substrings & `A5` risk:** Valid clinical numbers/shifted timestamps can match 4–5 digit MRN substrings locally; preserving diagnoses and LOS keeps unique-condition `A5` non-zero.
+* **Environment verification note:** Verified locally on macOS Python 3.14 with offline blocked sockets (`28/28` unit/security/contract/Passport tests pass); local Docker daemon was inactive.
