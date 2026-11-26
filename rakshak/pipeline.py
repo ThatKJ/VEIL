@@ -830,7 +830,7 @@ def scrub_component(comp: str, H: Harvest, sw: Sweeper, salt: str) -> str:
         if (re.fullmatch(r"[A-Z][a-z]{2,}", a) and re.fullmatch(r"[A-Z][a-z]{2,}", b)
                 and not ({a.lower(), b.lower()} & (COMMON_FILE_WORDS | COMMON_WORDS | L.CLINICAL_WORDS))):
             flagged = True
-            parts = [p for p in parts if p not in (a, b)]
+            keep = [p for p in keep if p not in (a, b)]
     if not flagged:
         # whole-stem checks (full names spanning separators)
         if sw.rx_lat_full.search(stem) or sw.rx_dev_full.search(stem) or sw.rx_ids.search(stem):

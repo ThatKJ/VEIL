@@ -113,10 +113,12 @@ def _name_ok(toks: list[str]) -> bool:
 _SURN = "|".join(sorted(L.SURNAMES, key=len, reverse=True))
 RX_SURNAME = re.compile(rf"(?<![A-Za-z.])((?:[A-Z][a-z]+\s+){{1,2}})({_SURN})\b", re.I)
 RX_CTX_NAME = re.compile(rf"(?i)\b(?:called\s+by|informed\s+by|brought\s+by|accompanied\s+by|visited\s+by|reported\s+by|"
-                         rf"handed\s+over\s+to|(?:complaint|shikayat|request|application|letter|statement|feedback|query)\s+(?:by|from)|"
+                         rf"handed\s+over\s+to|shikayatkarta|shikayatkarta|complainant|aavedak|avedak|prarthi|informant|caller\s*name|"
+                         rf"शिकायतकर्ता|आवेदक|प्रार्थी|सूचक|(?:complaint|shikayat|request|application|letter|statement|feedback|query)\s+(?:by|from)|"
                          rf"filed\s+by|submitted\s+by|signature|signed|sign\.?|हस्ताक्षर|sahi|regards|from|to|cc|bcc|attn\.?|"
                          rf"raised\s+by|lodged\s+by|written\s+by|witnessed\s+by|witness|signed\s+by|consent\s+given\s+by|caller|visitor|contact\s+person|escort|relative|attendant)\s*[:\-]?\s*({NAME_SEQ})")
 RX_CONSENT = re.compile(rf"(?i)\b(?:I|मैं)\s*,?\s+({NAME_SEQ})\s*,?\s+(?:S/O|D/O|W/O|consent|agree|hereby|authori[sz]e|declare|give|am|aged|resident)\b")
+RX_SIGN_PAREN = re.compile(rf"(?im)^((?=.*(?:sign|witness|attendant|relative|guardian|हस्ताक्षर|gawah|sakshi)).*?\(\s*)({NAME_TOK}(?:\s+{NAME_TOK}){{1,3}})(\s*\))")
 RX_NAME_VERB = re.compile(rf"(?<![A-Za-z.])({NAME_TOK}(?:[ \t]{NAME_TOK}){{1,3}})\s+(?:visited|came|called|met|brought|accompanied|"
                           rf"signed|left|arrived|requested|collected|took|stayed|attended|enquired)\b")
 NAME_VALUE = re.compile(rf"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){{1,3}}|[{DEVA}]+(?:\s+[{DEVA}]+){{1,3}})")
@@ -278,6 +280,7 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(g) - m.start(0)] + put("[NAME]") + rest + m.group(0)[m.end(g) - m.start(0):]
     t = RX_CTX_NAME.sub(ctxname, t)
     t = RX_CONSENT.sub(ctxname, t)
+    t = RX_SIGN_PAREN.sub(lambda m: m.group(1) + put("[NAME]") + m.group(3) if _name_ok(m.group(2).split()) else m.group(0), t)
 
     def nverb(m):
         toks = m.group(1).split()
