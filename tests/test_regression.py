@@ -22,6 +22,41 @@ class RegressionTests(unittest.TestCase):
             check=True, capture_output=True, env=env,
         )
 
+    def test_schema_key_matching_patient_name_keeps_record_locators(self):
+        """A patient called "Data" must not cause the structural key "data" to be renamed,
+        which used to collapse every nested record to loc "doc" with patient null (H16)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            (inp / "reg").mkdir(parents=True)
+            (inp / "reg" / "patients.csv").write_text(
+                "UHID,Patient Name,Gender,Age,Mobile\n"
+                "AYU-24-0101,Data Singh Bains,M,52,9876501234\n"
+                "AYU-24-0102,Ruha Kaur Mann,F,33,9123409876\n", encoding="utf-8")
+            visits = [{"pt": {"ref": "AYU-24-0101", "label": "Data Singh Bains"}, "consult": {"plan": ["Tab Metformin 500 mg BD"]}},
+                      {"pt": {"ref": "AYU-24-0102", "label": "Ruha Kaur Mann"}, "consult": {"plan": ["Tab Iron 100 mg OD"]}}]
+            (inp / "opd.json").write_text(json.dumps({
+                "meta": {"tool": "sync"},
+                "data": {"patientInfo": {"sessions": [{"tokens": visits}]}},
+                "zainab_siddiqui": {"note": "index entry"}}), encoding="utf-8")
+            (inp / "reg2.csv").write_text("UHID,Patient Name\nX-77881,Zainab Siddiqui\n", encoding="utf-8")
+            self._run_cli(inp, out)
+            sanitized = json.loads((out / "sanitized" / "opd.json").read_text(encoding="utf-8"))
+            self.assertIn("data", sanitized)
+            self.assertIn("patientInfo", sanitized["data"])
+            self.assertNotIn("zainab_siddiqui", sanitized)          # a real full-name key is still renamed
+            rows = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+            opd = {r["loc"]: r["patient"] for r in rows if r["file"] == "sanitized/opd.json"}
+            self.assertIn("/data/patientInfo/sessions/0/tokens/0", opd)
+            self.assertIn("/data/patientInfo/sessions/0/tokens/1", opd)
+            self.assertTrue(all(opd[k] for k in opd if "/tokens/" in k))
+            reg = {r["loc"]: r["patient"] for r in rows if r["file"].endswith("patients.csv")}
+            self.assertEqual(opd["/data/patientInfo/sessions/0/tokens/0"], reg["row:0"])
+            self.assertNotEqual(opd["/data/patientInfo/sessions/0/tokens/0"], opd["/data/patientInfo/sessions/0/tokens/1"])
+            blob = "\n".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file())
+            self.assertNotIn("Data Singh Bains", blob)
+            self.assertNotIn("Zainab Siddiqui", blob)
+
     def test_lab_dict_of_dicts_preserves_test_names_and_links_patient(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

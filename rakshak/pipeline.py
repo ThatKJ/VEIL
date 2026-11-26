@@ -916,7 +916,8 @@ class Rewriter:
         return scrub_text(s, ctx, self.sw)
 
     def key(self, k: str, ctx: Ctx, seen: set) -> str:
-        if k in STRUCT_KEYS:
+        if k in STRUCT_KEYS or self.schema_key(k):
+            seen.add(k)
             return k
         nk = scrub_text(k, ctx, self.sw)
         if nk != k:
@@ -926,6 +927,15 @@ class Rewriter:
             nk += "_"
         seen.add(nk)
         return nk
+
+    def schema_key(self, k: str) -> bool:
+        """Identifier-style schema keys ("data", "patientInfo", "opd_sessions") are not person names,
+        even when a patient happens to be called "Data": skip single-token name matching for them, but
+        still rename on full names, e-mails, phones or long digit runs."""
+        if not re.fullmatch(r"[a-z][a-zA-Z0-9_]{0,40}", k) or re.search(r"\d{4,}", k):
+            return False
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
+        return not (self.sw.rx_lat_full.search(spaced) or self.sw.rx_ids.search(k))
 
     def walk(self, obj, kind, ctx: Ctx, rec, res_kind=None):
         if isinstance(obj, dict):
