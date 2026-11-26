@@ -12,6 +12,7 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 from itertools import chain
@@ -2310,6 +2311,239 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
         j.out_rel = o
 
     # ---- rewrite & stream records.jsonl atomically per file
+    san_resolved = san.resolve()
+    san_resolved.mkdir(parents=True, exist_ok=True)
+    _hl7_rw_ref = hl7_rewrite
+
+    def _rewrite_one(j: FileJob, rw_loc: Rewriter, st_loc: Stats, ctx_fn) -> None:
+        dest = (san / j.out_rel).resolve()
+        if not dest.is_relative_to(san_resolved):
+            j.status, j.reason = "quarantined", "unsafe_path"
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp_dest = dest.with_name(f".veil_tmp_{os.getpid()}_{dest.name}")
+        try:
+            with time_budget(_file_budget(j.raw_len)):
+                if j.reparse:
+                    _rehydrate_job(j)
+                if j.kind in ("jsonl", "table"):
+                    with open(tmp_dest, "w", encoding="utf-8", newline="", buffering=1024 * 1024) as out_f:
+                        chunk_buf: list[str] = []
+
+                        def flush_chunk():
+                            if not chunk_buf:
+                                return
+                            block = "".join(chunk_buf)
+                            chunk_buf.clear()
+                            if verify_on:
+                                block, hits = verify_text(block, crit, verify_idx)
+                                st_loc["verify_hits"] += hits
+                            out_f.write(block)
+
+                        if j.kind == "jsonl":
+                            data_iter = _iter_reparse_jsonl(j) if j.reparse else iter(j.data)
+                            for r, obj in zip(j.recs, data_iter):
+                                c = ctx_fn(r, j)
+                                if isinstance(obj, (dict, list)):
+                                    line_out = json.dumps(rw_loc.walk(obj, None, c, r), ensure_ascii=False)
+                                else:
+                                    line_out = scrub_text(obj, c, sw)
+                                chunk_buf.append(line_out + "\n")
+                                if len(chunk_buf) >= _STREAM_CHUNK_ROWS:
+                                    flush_chunk()
+                            flush_chunk()
+                        else:
+                            line_buf = io.StringIO()
+                            w = csv.writer(line_buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")
+                            hctx = ctx_fn(None, j)
+                            row_iter = _iter_reparse_table(j) if j.reparse else iter(j.rows)
+                            hdr_raw = next(row_iter)
+                            header = [scrub_text(h, hctx, sw) for h in hdr_raw]
+
+                            _nl = "\r\n" if j.crlf else "\n"
+                            _delim = j.delim
+
+                            def emit_row(values):
+                                if j.widths:
+                                    fields = [v.ljust(b - a) for v, a, b in zip(values, j.widths, j.widths[1:])]
+                                    chunk_buf.append("".join(fields) + values[-1] + _nl)
+                                elif all(_delim not in v and '"' not in v and "\n" not in v and "\r" not in v for v in values):
+                                    chunk_buf.append(_delim.join(values) + _nl)
+                                else:
+                                    line_buf.seek(0)
+                                    line_buf.truncate(0)
+                                    w.writerow(values)
+                                    chunk_buf.append(line_buf.getvalue())
+                                if len(chunk_buf) >= _STREAM_CHUNK_ROWS:
+                                    flush_chunk()
+
+                            for row in j.preamble:
+                                emit_row([scrub_text(v, hctx, sw) for v in row])
+                            emit_row(header)
+                            name_cols = [ci for ci, k in enumerate(j.colkinds) if k == "NAME"]
+                            for i, row in enumerate(row_iter):
+                                if i in j.repeat_headers:
+                                    emit_row(header if row == hdr_raw else [scrub_text(v, hctx, sw) for v in row])
+                                    continue
+                                r = j.recs[i]
+                                c = ctx_fn(r, j)
+                                new_row = []
+                                bk = _banner_kinds(row, j.colkinds, j.order)
+                                if bk is not None:
+                                    for ci, v in enumerate(row):
+                                        new_row.append(rw_loc.value(v, bk[ci], c, r))
+                                    emit_row(new_row)
+                                    continue
+                                if _is_kv_cont(row):
+                                    for v in row:
+                                        new_row.append(rw_loc.value(v, None, c, r))
+                                    emit_row(new_row)
+                                    continue
+                                ragged = len(row) < len(j.colkinds) or (len(row) > len(j.colkinds) and len(j.colkinds) < 6)
+                                attr_v = row[j.eav[0]] if (j.eav and not ragged and j.eav[0] < len(row)) else None
+                                for ci, v in enumerate(row):
+                                    k = j.colkinds[ci] if ci < len(j.colkinds) else None
+                                    if j.eav and not ragged and ci == j.eav[1] and attr_v is not None:
+                                        k = _eav_cell_kind(attr_v) or k
+                                    if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE", "FAMILY_ID"):
+                                        new_row.append(scrub_text(v, c, sw))
+                                        continue
+                                    if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
+                                        st_loc["identifiers"] += 1
+                                        new_row.append("")
+                                        continue
+                                    if k == "COND":
+                                        new_row.append(scrub_text(v, c, sw))
+                                        continue
+                                    new_row.append(rw_loc.value(v, k, c, r))
+                                emit_row(new_row)
+                            flush_chunk()
+                else:
+                    if j.kind == "json":
+                        if j.rec_ptrs:
+                            meta_ctx = ctx_fn(None, j)
+                            data = rewrite_json(rw_loc, j.data, (), j, meta_ctx, ctx_fn)
+                        else:
+                            r = j.doc_rec
+                            data = rw_loc.walk(j.data, None, ctx_fn(r, j), r, col_map=j.col_map or None)
+                        result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
+                    else:
+                        r = j.doc_rec
+                        c = ctx_fn(r, j)
+                        if RX_HL7.match(j.text):
+                            result = _hl7_rw_ref(j.text, rw_loc, c, r, sw)
+                        else:
+                            blocks = []
+
+                            def _rw_struct(m):
+                                bp = _parse_json_str(m.group(2))
+                                if bp is None:
+                                    return m.group(0)
+                                tag = f"@@VEILSTRUCT_{len(blocks)}@@"
+                                blocks.append((tag, m.group(1) + json.dumps(rw_loc.walk(bp, None, c, r), ensure_ascii=False) + m.group(3)))
+                                return tag
+
+                            masked_t = _RX_STRUCT_BLOCK.sub(_rw_struct, j.text)
+                            result = scrub_text(kv_rewrite(masked_t, rw_loc, c, r), c, sw)
+                            for tag, body in blocks:
+                                result = result.replace(tag, body)
+                        if r is not None and r.pid and r.pid not in result:
+                            result = f"Patient: {r.pid}\n" + result
+                    if verify_on:
+                        result, hits = verify_text(result, crit, verify_idx)
+                        st_loc["verify_hits"] += hits
+                    with open(tmp_dest, "w", encoding="utf-8", newline="") as out_f:
+                        out_f.write(result)
+                os.replace(tmp_dest, dest)
+        except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
+            if tmp_dest.exists():
+                tmp_dest.unlink(missing_ok=True)
+            j.status, j.reason = "quarantined", "processing_error"
+            j.data = j.rows = j.text = None
+
+    san_idxs = [idx for idx, j in enumerate(jobs) if j.status == "sanitized"]
+    total_san_bytes = sum(jobs[idx].raw_len for idx in san_idxs)
+    use_fork = (
+        hasattr(os, "fork")
+        and os.environ.get("RAKSHA_CPUS", "2") != "1"
+        and (os.cpu_count() or 1) >= 2
+        and threading.active_count() == 1
+        and len(san_idxs) >= 8
+        and total_san_bytes >= 1_500_000
+    )
+
+    fork_done = False
+    if use_fork:
+        # Balanced 2-way LPT split weighted for free-text scrub density (parent + 1 forked child = max 2 CPUs).
+        b0: list[int] = []
+        b1: list[int] = []
+        s0 = s1 = 0
+        for idx in sorted(san_idxs, key=lambda i: jobs[i].raw_len * (4 if jobs[i].kind == "text" else 1), reverse=True):
+            wt = jobs[idx].raw_len * (4 if jobs[idx].kind == "text" else 1)
+            if s0 <= s1:
+                b0.append(idx)
+                s0 += wt
+            else:
+                b1.append(idx)
+                s1 += wt
+        r_fd, w_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(r_fd)
+            code = 0
+            try:
+                c_st = Stats()
+                c_rw = Rewriter(H, sw, c_st, policy, rec_ids=rec_ids, rec_digs=rec_digs)
+
+                def c_ctx_for(rec: Rec | None, job: FileJob) -> Ctx:
+                    if rec is not None and rec.pid:
+                        return Ctx(H, rec.pid, P.days_for(rec.key, maxd), job.order, plan.band_args(rec.key), c_st, plan.rule(rec.key))
+                    return Ctx(H, None, P.days_for(f"{job.rel}#{rec.loc}" if rec is not None else job.rel, maxd),
+                               job.order, plan.band_args(None), c_st, plan.default)
+
+                updates: list[tuple[int, str, str | None, dict[str, tuple[str, str]]]] = []
+                for idx in b1:
+                    jb = jobs[idx]
+                    _rewrite_one(jb, c_rw, c_st, c_ctx_for)
+                    if jb.status != "sanitized" or jb.out_locs:
+                        updates.append((idx, jb.status, jb.reason, jb.out_locs))
+                payload = json.dumps([dict(c_st), updates], ensure_ascii=False).encode("utf-8")
+                with os.fdopen(w_fd, "wb") as wf:
+                    wf.write(payload)
+            except Exception:  # noqa: BLE001
+                code = 1
+                try:
+                    os.close(w_fd)
+                except OSError:
+                    pass
+            os._exit(code)
+        else:
+            os.close(w_fd)
+            for idx in b0:
+                _rewrite_one(jobs[idx], rw, st, ctx_for)
+            with os.fdopen(r_fd, "rb") as rf:
+                raw_msg = rf.read()
+            _, status = os.waitpid(pid, 0)
+            if status == 0 and raw_msg:
+                c_st_dict, updates = json.loads(raw_msg.decode("utf-8"))
+                for k_st, v_st in c_st_dict.items():
+                    st[k_st] += v_st
+                for idx, st_val, rsn, olocs in updates:
+                    jb = jobs[idx]
+                    jb.status, jb.reason = st_val, rsn
+                    if olocs:
+                        jb.out_locs = {lk: tuple(lv) for lk, lv in olocs.items()}
+                fork_done = True
+            else:
+                for idx in b1:
+                    if jobs[idx].status == "sanitized":
+                        _rewrite_one(jobs[idx], rw, st, ctx_for)
+                fork_done = True
+
+    if not fork_done:
+        for idx in san_idxs:
+            _rewrite_one(jobs[idx], rw, st, ctx_for)
+
     records_total = 0
     records_linked = 0
     rj_tmp = out / "records.jsonl.tmp"
@@ -2318,152 +2552,6 @@ def _run_impl(inp: Path, out: Path, policy: dict) -> int:
             for j in jobs:
                 if j.status != "sanitized":
                     continue
-                dest = (san / j.out_rel).resolve()
-                if not dest.is_relative_to(san.resolve()):
-                    j.status, j.reason = "quarantined", "unsafe_path"
-                    continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp_dest = dest.with_name(f".veil_tmp_{os.getpid()}_{dest.name}")
-                try:
-                    with time_budget(_file_budget(j.raw_len)):
-                        if j.reparse:
-                            _rehydrate_job(j)
-                        if j.kind in ("jsonl", "table"):
-                            with open(tmp_dest, "w", encoding="utf-8", newline="", buffering=1024 * 1024) as out_f:
-                                chunk_buf: list[str] = []
-
-                                def flush_chunk():
-                                    if not chunk_buf:
-                                        return
-                                    block = "".join(chunk_buf)
-                                    chunk_buf.clear()
-                                    if verify_on:
-                                        block, hits = verify_text(block, crit, verify_idx)
-                                        st["verify_hits"] += hits
-                                    out_f.write(block)
-
-                                if j.kind == "jsonl":
-                                    data_iter = _iter_reparse_jsonl(j) if j.reparse else iter(j.data)
-                                    for r, obj in zip(j.recs, data_iter):
-                                        c = ctx_for(r, j)
-                                        if isinstance(obj, (dict, list)):
-                                            line_out = json.dumps(rw.walk(obj, None, c, r), ensure_ascii=False)
-                                        else:
-                                            line_out = scrub_text(obj, c, sw)
-                                        chunk_buf.append(line_out + "\n")
-                                        if len(chunk_buf) >= _STREAM_CHUNK_ROWS:
-                                            flush_chunk()
-                                    flush_chunk()
-                                else:
-                                    line_buf = io.StringIO()
-                                    w = csv.writer(line_buf, delimiter=j.delim, lineterminator="\r\n" if j.crlf else "\n")
-                                    hctx = ctx_for(None, j)
-                                    row_iter = _iter_reparse_table(j) if j.reparse else iter(j.rows)
-                                    hdr_raw = next(row_iter)
-                                    header = [scrub_text(h, hctx, sw) for h in hdr_raw]
-
-                                    _nl = "\r\n" if j.crlf else "\n"
-                                    _delim = j.delim
-
-                                    def emit_row(values):
-                                        if j.widths:
-                                            fields = [v.ljust(b - a) for v, a, b in zip(values, j.widths, j.widths[1:])]
-                                            chunk_buf.append("".join(fields) + values[-1] + _nl)
-                                        elif all(_delim not in v and '"' not in v and "\n" not in v and "\r" not in v for v in values):
-                                            chunk_buf.append(_delim.join(values) + _nl)
-                                        else:
-                                            line_buf.seek(0)
-                                            line_buf.truncate(0)
-                                            w.writerow(values)
-                                            chunk_buf.append(line_buf.getvalue())
-                                        if len(chunk_buf) >= _STREAM_CHUNK_ROWS:
-                                            flush_chunk()
-
-                                    for row in j.preamble:
-                                        emit_row([scrub_text(v, hctx, sw) for v in row])
-                                    emit_row(header)
-                                    name_cols = [ci for ci, k in enumerate(j.colkinds) if k == "NAME"]
-                                    for i, row in enumerate(row_iter):
-                                        if i in j.repeat_headers:
-                                            emit_row(header if row == hdr_raw else [scrub_text(v, hctx, sw) for v in row])
-                                            continue
-                                        r = j.recs[i]
-                                        c = ctx_for(r, j)
-                                        new_row = []
-                                        bk = _banner_kinds(row, j.colkinds, j.order)
-                                        if bk is not None:
-                                            for ci, v in enumerate(row):
-                                                new_row.append(rw.value(v, bk[ci], c, r))
-                                            emit_row(new_row)
-                                            continue
-                                        if _is_kv_cont(row):
-                                            for v in row:
-                                                new_row.append(rw.value(v, None, c, r))
-                                            emit_row(new_row)
-                                            continue
-                                        ragged = len(row) < len(j.colkinds) or (len(row) > len(j.colkinds) and len(j.colkinds) < 6)
-                                        attr_v = row[j.eav[0]] if (j.eav and not ragged and j.eav[0] < len(row)) else None
-                                        for ci, v in enumerate(row):
-                                            k = j.colkinds[ci] if ci < len(j.colkinds) else None
-                                            if j.eav and not ragged and ci == j.eav[1] and attr_v is not None:
-                                                k = _eav_cell_kind(attr_v) or k
-                                            if ragged and k not in ("NAME", "REL_NAME", "MRN", "AADHAAR", "ABHA", "PAN", "PHONE", "EMAIL", "INSURANCE", "FAMILY_ID"):
-                                                new_row.append(scrub_text(v, c, sw))
-                                                continue
-                                            if k == "NAME" and name_cols and ci != name_cols[0] and v.strip():
-                                                st["identifiers"] += 1
-                                                new_row.append("")
-                                                continue
-                                            if k == "COND":
-                                                new_row.append(scrub_text(v, c, sw))
-                                                continue
-                                            new_row.append(rw.value(v, k, c, r))
-                                        emit_row(new_row)
-                                    flush_chunk()
-                        else:
-                            if j.kind == "json":
-                                if j.rec_ptrs:
-                                    meta_ctx = ctx_for(None, j)
-                                    data = rewrite_json(rw, j.data, (), j, meta_ctx, ctx_for)
-                                else:
-                                    r = j.doc_rec
-                                    data = rw.walk(j.data, None, ctx_for(r, j), r, col_map=j.col_map or None)
-                                result = json.dumps(data, ensure_ascii=False, indent=j.indent) + "\n"
-                            else:
-                                r = j.doc_rec
-                                c = ctx_for(r, j)
-                                if RX_HL7.match(j.text):
-                                    result = hl7_rewrite(j.text, rw, c, r, sw)
-                                else:
-                                    blocks = []
-
-                                    def _rw_struct(m):
-                                        bp = _parse_json_str(m.group(2))
-                                        if bp is None:
-                                            return m.group(0)
-                                        tag = f"@@VEILSTRUCT_{len(blocks)}@@"
-                                        blocks.append((tag, m.group(1) + json.dumps(rw.walk(bp, None, c, r), ensure_ascii=False) + m.group(3)))
-                                        return tag
-
-                                    masked_t = _RX_STRUCT_BLOCK.sub(_rw_struct, j.text)
-                                    result = scrub_text(kv_rewrite(masked_t, rw, c, r), c, sw)
-                                    for tag, body in blocks:
-                                        result = result.replace(tag, body)
-                                if r is not None and r.pid and r.pid not in result:
-                                    result = f"Patient: {r.pid}\n" + result
-                            if verify_on:
-                                result, hits = verify_text(result, crit, verify_idx)
-                                st["verify_hits"] += hits
-                            with open(tmp_dest, "w", encoding="utf-8", newline="") as out_f:
-                                out_f.write(result)
-                        os.replace(tmp_dest, dest)
-                except Exception:  # noqa: BLE001 - fail safe: quarantine, never export half-cleaned data
-                    if tmp_dest.exists():
-                        tmp_dest.unlink(missing_ok=True)
-                    j.status, j.reason = "quarantined", "processing_error"
-                    j.data = j.rows = j.text = None
-                    continue
-
                 for idx, r in enumerate(j.recs):
                     if idx in j.repeat_headers or r.loc.startswith("@"):
                         continue
