@@ -1407,6 +1407,32 @@ def _cleanup_old_workdirs(state: ServerState) -> None:
             shutil.rmtree(p, ignore_errors=True)
 
 
+DEMO_SECRET = "veil-command-center-demo-key"  # public, synthetic demo bundle only (reproducible demo)
+
+
+def _ephemeral_secret() -> str:
+    """Uploads without a secret get a random one-time key instead of the public demo key.
+    It is never returned, logged or persisted; supply your own key for reproducible releases."""
+    import secrets
+    return secrets.token_urlsafe(32)
+
+
+def _build_csp() -> str:
+    import base64
+    hashes = []
+    idx = WEB_DIR / "index.html"
+    if idx.is_file():
+        for m in re.finditer(r"<script>(.*?)</script>", idx.read_text(encoding="utf-8"), re.S):
+            hashes.append("'sha256-" + base64.b64encode(hashlib.sha256(m.group(1).encode("utf-8")).digest()).decode() + "'")
+    # 'unsafe-eval' only for browser test automation (Playwright string predicates); VEIL never calls eval and
+    # inline scripts stay blocked except the hashed appearance bootstrap.
+    return ("default-src 'self'; script-src 'self' 'unsafe-eval' " + " ".join(hashes) + "; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+
+
+_CSP = _build_csp()
+
+
 def make_handler(state: ServerState):
     class VeilHandler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -1422,6 +1448,10 @@ def make_handler(state: ServerState):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("Content-Security-Policy", _CSP)
             if self.close_connection:
                 self.send_header("Connection", "close")
             if extra_headers:
@@ -1463,16 +1493,37 @@ def make_handler(state: ServerState):
                 except Exception:
                     pass
 
+        def _allowed_hostnames(self) -> set[str]:
+            allowed = {"127.0.0.1", "localhost", "::1"}
+            bind = str(self.server.server_address[0]).lower()
+            if bind not in ("", "0.0.0.0", "::"):
+                allowed.add(bind)
+            return allowed
+
+        def _check_host(self) -> None:
+            """DNS-rebinding defence: only loopback (or the explicit bind address) may name this server."""
+            host_hdr = (self.headers.get("Host") or "").strip().lower()
+            try:
+                hp = urllib.parse.urlsplit("//" + host_hdr)
+                hostname, port = hp.hostname, hp.port
+            except ValueError:
+                hostname, port = None, None
+            if not hostname or hostname not in self._allowed_hostnames() or (port is not None and port != self.server.server_address[1]):
+                raise UiApiError(403, "forbidden_host", "Unexpected Host header")
+
         def _check_same_origin(self) -> None:
             origin = self.headers.get("Origin")
             if origin is None:
                 return
             if origin.strip().lower() == "null":
                 raise UiApiError(403, "forbidden_origin", "Cross-origin POST with null origin blocked")
-            po = urllib.parse.urlparse(origin)
-            host_hdr = (self.headers.get("Host") or "").strip()
-            if not po.netloc or (host_hdr and po.netloc.lower() != host_hdr.lower()):
-                raise UiApiError(403, "forbidden_origin", "Cross-origin POST request blocked")
+            try:
+                po = urllib.parse.urlsplit(origin.strip())
+                ok = po.scheme == "http" and po.hostname in self._allowed_hostnames() and (po.port or 80) == self.server.server_address[1]
+            except ValueError:
+                ok = False
+            if not ok:
+                raise UiApiError(403, "forbidden_origin", "Cross-origin request blocked")
 
         def _read_body_exact(self, limit: int) -> bytes:
             te = (self.headers.get("Transfer-Encoding") or "").lower()
@@ -1530,6 +1581,11 @@ def make_handler(state: ServerState):
             return b"".join(chunks)
 
         def do_GET(self) -> None:
+            try:
+                self._check_host()
+            except UiApiError as exc:
+                self._send_json(exc.status_code, {"error": exc.message, "error_code": exc.code})
+                return
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
@@ -1757,6 +1813,7 @@ def make_handler(state: ServerState):
 
         def do_POST(self) -> None:
             try:
+                self._check_host()
                 self._check_same_origin()
             except UiApiError as exc:
                 self._send_json(exc.status_code, {"error": exc.message, "error_code": exc.code})
@@ -1805,7 +1862,7 @@ def make_handler(state: ServerState):
                         fields, upload_mem, staged_meta = _parse_multipart_upload(raw_body, ctype, inp_dir)
                         mode = str(fields.get("mode", "upload"))
                         policy_mode = str(fields.get("policy", "adaptive"))
-                        secret = str(fields.get("secret") or "veil-command-center-demo-key")[:128]
+                        secret = str(fields.get("secret") or "")[:128] or _ephemeral_secret()
                         label = str(fields.get("label") or f"Uploaded Synthetic Dataset ({len(staged_meta)} files)")
                         sync_flag = str(fields.get("sync", "")).lower() in ("1", "true")
                         run_optional = str(fields.get("run_optional", "")).lower() in ("1", "true")
@@ -1819,7 +1876,7 @@ def make_handler(state: ServerState):
                             raise UiApiError(400, "upload_error", "Expected JSON object")
                         mode = str(req.get("mode", "demo"))
                         policy_mode = str(req.get("policy", "adaptive"))
-                        secret = str(req.get("secret") or "veil-command-center-demo-key")[:128]
+                        secret = str(req.get("secret") or "")[:128] or (DEMO_SECRET if mode == "demo" else _ephemeral_secret())
                         sync_flag = bool(req.get("sync"))
                         run_optional = bool(req.get("run_optional", mode == "demo"))
                         if mode == "demo":
@@ -2303,6 +2360,14 @@ def main() -> int:
     print(f"VEIL Clinical Privacy Command Center running offline at {url}", flush=True)
     if args.open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    import signal
+
+    def _graceful(signum, frame):  # SIGTERM/SIGHUP take the same path as Ctrl-C so atexit removes the private workdir
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if _sig is not None:
+            signal.signal(_sig, _graceful)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

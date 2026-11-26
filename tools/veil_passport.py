@@ -41,7 +41,7 @@ ABHA = re.compile(r"(?<![\w\-])\d{2}[\-\s]?\d{4}[\-\s]?\d{4}[\-\s]?\d{4}(?![\w\-
 _COMPACT_TS = re.compile(r"^(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?:[01]\d|2[0-3])(?:[0-5]\d)(?:[0-5]\d)?$")
 EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 PAN = re.compile(r"(?<![A-Z0-9])[A-Z]{5}\d{4}[A-Z](?![A-Z0-9])")
-B64 = re.compile(r"[A-Za-z0-9+/]{24,4096}={0,2}")
+B64 = re.compile(r"[A-Za-z0-9+/]{12,4096}={0,2}")  # 12+: a base64-encoded 10-digit phone has 14 data chars
 HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{2}){10,256}(?![0-9A-Za-z])")
 UESC = re.compile(r"(?:\\u[0-9a-fA-F]{4})+")
 PCT = re.compile(r"(?:%[0-9a-fA-F]{2}){2,}")
@@ -97,7 +97,8 @@ def with_decoded_extras(text: str) -> str:
     for m in B64.finditer(text):
         tok = m.group(0)
         try:
-            extra.append(base64.b64decode(tok + "=" * (-len(tok) % 4)).decode("utf-8", "ignore"))
+            core = tok.rstrip("=")  # re-pad canonically: tokens already ending in '==' must not get extra padding
+            extra.append(base64.b64decode(core + "=" * (-len(core) % 4)).decode("utf-8", "ignore"))
         except (binascii.Error, ValueError):
             pass
     for m in HEX.finditer(text):
@@ -389,6 +390,7 @@ def _audit_fhir_bundle(obj: dict) -> tuple[int, int, int, int]:
             rid = o.get("id")
             if isinstance(rt, str) and isinstance(rid, str) and rid:
                 res_ids.add(f"{rt}/{rid}")
+                res_ids.add(f"#{rid}")  # contained-resource (local fragment) reference
             if isinstance(o.get("reference"), str):
                 refs.append(o["reference"])
             for k in ("birthDate", "effectiveDateTime", "authoredOn", "issued", "recordedDate", "start", "end", "lastUpdated"):
@@ -471,6 +473,7 @@ def audit(inp: Path, out: Path) -> dict:
     parse_ok = parse_fail = 0
     row_match = row_total = 0
     fhir_refs_ok = fhir_refs_tot = fhir_dates_ok = fhir_dates_tot = 0
+    fhir_refs_broken = 0  # references that resolved in the input bundle but not in its sanitized output
     parsed_cache: dict[str, _ParsedOutputFile] = {}
     in_parsed_cache: dict[Path, _ParsedOutputFile] = {}
 
@@ -496,6 +499,12 @@ def audit(inp: Path, out: Path) -> dict:
             if suf == ".json":
                 obj = pf.obj if pf.obj is not None else json.loads(pf.text)
                 rok, rtot, dok, dtot = _audit_fhir_bundle(obj)
+                try:
+                    iobj = ipf.obj if getattr(ipf, "obj", None) is not None else json.loads(ipf.text)
+                    irok = _audit_fhir_bundle(iobj)[0]
+                except (ValueError, TypeError):
+                    irok = 0
+                fhir_refs_broken += max(0, irok - rok)
                 fhir_refs_ok += rok
                 fhir_refs_tot += rtot
                 fhir_dates_ok += dok
@@ -529,6 +538,7 @@ def audit(inp: Path, out: Path) -> dict:
         "outputs_parse_fail": parse_fail,
         "tables_row_count_preserved": f"{row_match}/{row_total}",
         "fhir_references_resolved": f"{fhir_refs_ok}/{fhir_refs_tot}" if fhir_refs_tot else "0/0 (N/A)",
+        "fhir_references_broken_by_sanitization": fhir_refs_broken,
         "report_counts_consistent": honest,
     }
     struct_ok = (
@@ -538,6 +548,8 @@ def audit(inp: Path, out: Path) -> dict:
         and unexpected_exports == 0
         and unsafe_paths == 0
         and honest
+        and row_match == row_total
+        and fhir_refs_broken == 0
     )
     R["checks"]["structural"] = _make_check(
         "PASS" if struct_ok else "FAIL",
@@ -559,6 +571,10 @@ def audit(inp: Path, out: Path) -> dict:
             struct_errs.append(f"{unsafe_paths} unsafe symlink/path(s)")
         if not honest:
             struct_errs.append("report.json counts mismatch exported artifacts")
+        if row_match != row_total:
+            struct_errs.append(f"{row_total - row_match} table(s) changed row count")
+        if fhir_refs_broken:
+            struct_errs.append(f"{fhir_refs_broken} FHIR reference(s) broken by sanitization")
         R["residual_risks"].append("Structural verification failed: " + ", ".join(struct_errs))
 
     # ---------------- A. Privacy residue (independent detectors + O(N + L) indexed lookup + exact assigned-PSN PAN context)

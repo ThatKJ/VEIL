@@ -129,12 +129,8 @@ def main() -> int:
                 page.set_input_files("#file-input", [str(big)])
                 msg = page.text_content("#upload-validation-msg") or ""
                 check("F >16 MB rejected before upload", "16 MB" in msg, msg[:80])
-                page.set_input_files("#file-input", [paths[0]])
-                page.fill("#secret-input", "")
-                page.click("#btn-run-uploaded")
-                check("F empty secret blocked client-side", "secret" in (page.text_content("#upload-validation-msg") or "").lower())
+                check("F secret field not prefilled with the public demo key", page.input_value("#secret-input") == "")
                 page.fill("#secret-input", "journey-secret")
-                page.click("#btn-clear-staged")
 
                 # ---- Journey C: large dataset + reload mid-job (F reconnection)
                 big_csv = td / f"hospital_{a.rows}.csv"

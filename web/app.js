@@ -449,12 +449,7 @@
 
   async function dispatchUploadRun(logEl) {
     if (state.isSubmitting || !state.stagedFiles.length) return;
-    const secretVal = $("secret-input").value.trim();
-    if (!secretVal) {
-      showValidationError("Enter a pseudonym secret before running. It keys every pseudonym and date shift.");
-      $("secret-input").focus();
-      return;
-    }
+    const secretVal = $("secret-input").value.trim(); // blank: the server generates a random one-time key
     clearValidationError();
     setRunControlsBusy(true);
     setStatus("Uploading Dataset...", "busy");
@@ -466,7 +461,7 @@
       const fd = new FormData();
       fd.append("mode", "upload");
       fd.append("policy", currentPolicy());
-      fd.append("secret", secretVal);
+      if (secretVal) fd.append("secret", secretVal);
       fd.append("label", `Uploaded Synthetic Dataset (${state.stagedFiles.length} files)`);
       fd.append("relpaths", JSON.stringify(state.stagedFiles.map((f) => f.path)));
       for (const item of state.stagedFiles) {
@@ -489,7 +484,7 @@
 
   async function dispatchDemoRun(logEl) {
     if (state.isSubmitting) return;
-    const secretVal = $("secret-input").value.trim() || "veil-command-center-demo-key";
+    const secretVal = $("secret-input").value.trim(); // blank: the server uses the public demo key for the synthetic bundle
     clearValidationError();
     setRunControlsBusy(true);
     setStatus("Running demo…", "busy");
@@ -500,7 +495,7 @@
       const start = await apiFetchJson("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "demo", policy: currentPolicy(), secret: secretVal, run_optional: true }),
+        body: JSON.stringify({ mode: "demo", policy: currentPolicy(), ...(secretVal ? { secret: secretVal } : {}), run_optional: true }),
       });
       await pollJob(start.job_id, logEl);
     } catch (err) {
