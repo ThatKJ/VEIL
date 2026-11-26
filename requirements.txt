@@ -1,6 +1,1 @@
-# The starter uses only the Python standard library.
-# Add what you need, for example:
-# rapidfuzz
-# jellyfish
-# indic-transliteration
-# cryptography
+# Rakshak uses only the Python 3.10+ standard library (no models, no network, no native extensions).
