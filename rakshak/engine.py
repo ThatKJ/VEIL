@@ -132,7 +132,7 @@ def sniff_kind(ext: str, text: str) -> str:
             return "json"
     if ext in (".csv", ".tsv"):
         return "table"
-    if ext in (".txt", ".md", ".log", ".text", ""):
+    if ext in (".txt", ".md", ".log", ".text", "", ".ini", ".cfg", ".conf", ".properties", ".yaml", ".yml", ".rst", ".note", ".msg", ".hl7", ".er7"):
         return "text"
     return "unsupported"
 

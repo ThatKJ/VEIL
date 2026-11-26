@@ -48,6 +48,25 @@ class RegressionTests(unittest.TestCase):
             rows = [json.loads(l) for l in (out / "records.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertTrue(rows[0]["patient"] and rows[0]["patient"] in text)
 
+    def test_malformed_jsonl_rows_are_parsed_literally_and_linked(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            inp, out = root / "input", root / "out"
+            inp.mkdir()
+            (inp / "reg.ndjson").write_text(
+                '// export v2\n'
+                '{"uhid": "MDR24x34706", "hesaru": "Khorigi Kuruba", "durawani": "+91 640 622 8041"}\n'
+                "{'uhid': 'MDR24x33949', 'hesaru': 'Khobiyish Hiremath', 'durawani': '+91 905 176 3028'}\n"
+                '{"uhid": "MDR24x33950", "hesaru": "Yokhil Hiremath", note: \'kaagada\',}\n', encoding="utf-8")
+            self._run_cli(inp, out)
+            text = next(p for p in (out / "sanitized").rglob("*") if p.is_file()).read_text(encoding="utf-8")
+            for raw in ("Khorigi", "Khobiyish", "Yokhil", "MDR24x33949", "9051763028", "905 176 3028"):
+                self.assertNotIn(raw, text)
+            self.assertIn("kaagada", text)
+            rows = {r["loc"]: r["patient"] for r in map(json.loads, (out / "records.jsonl").read_text().splitlines())}
+            for loc in ("row:1", "row:2", "row:3"):
+                self.assertTrue(rows[loc] and rows[loc] in text, loc)
+
     def test_national_id_typo_is_not_a_conflict_but_different_ids_are(self):
         from rakshak.linker import _one_edit, compatible, Cluster
         base = {"names": [["Vakeneel", "Grewal"]], "rel": [], "ids": set(), "phones": set(), "dob": "1990-02-17",

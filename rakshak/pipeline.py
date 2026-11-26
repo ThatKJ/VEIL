@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import ast
 import json
 import os
 import re
@@ -222,7 +223,7 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None, ord
 
 
 RX_KV = re.compile(r"(?m)^([ \t]*\|[ \t]*)([^|\n]{1,40}?)([ \t]*\|[ \t]*)([^|\n]+?)([ \t]*\|[ \t]*)$"
-                   r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:\n|]{0,30}?)(\**[ \t]*[:：][ \t]*\**)([^\n]+?)([ \t]*)$")
+                   r"|^([ \t]*[-*•]?[ \t]*\**)([A-Za-z\u0900-\u097F][^:=\n|]{0,30}?)(\**[ \t]*[:：=][ \t]*\**)([^\n]+?)([ \t]*)$")
 KV_KINDS = {"NAME", "REL_NAME", "MRN", "PHONE", "AADHAAR", "ABHA", "PAN", "EMAIL", "INSURANCE", "DOB", "AGE", "VILLAGE",
             "ADDRESS", "PIN"}
 
@@ -483,10 +484,16 @@ _NON_PATIENT_KEYS = {"result", "results", "tests", "panels", "loinc", "unit", "r
                      "price", "rate", "amount", "tariff", "items", "medications", "drugs", "diagnoses"}
 
 
+_DOSE_SHAPE = re.compile(r"(?i)\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|iu|units?|%)\b|\b(?:tab|cap|inj|syp|syrup)\.?\s")
+
+
 def _patient_list(v) -> bool:
     """A list of objects whose items carry patient evidence (judged by the evidence extractor itself)."""
     if not (isinstance(v, list) and v and all(isinstance(x, dict) for x in v)):
         return False
+    vals = [x.get(k) for x in v[:12] for k in x if kind_of_key(k) == "NAME" and isinstance(x.get(k), str)]
+    if vals and sum(1 for x in vals if _DOSE_SHAPE.search(x)) >= 0.5 * len(vals):
+        return False             # a medication / order list ({"name": "Tab Metformin 500 mg"}), not patients
     hits = 0
     sample = v[:12]
     for x in sample:
@@ -528,6 +535,38 @@ def _patient_map(node):
     for item in sample[1:]:
         common.intersection_update(item)
     return bool(common) and _patient_list(sample)
+
+
+_RX_BAREKEY = re.compile(r"([{,]\s*)([A-Za-z_][\w-]{0,40})\s*:")
+_RX_TRAIL = re.compile(r",\s*([}\]])")
+
+
+def _lenient_obj(line: str):
+    """A JSON-Lines row written as a Python dict / JS object literal (single quotes, bare keys,
+    trailing commas). Parsed only with literal parsers, never evaluated; otherwise kept as text."""
+    t = line.strip()
+    if not (t.startswith("{") and t.endswith("}")) or len(t) > 20000:
+        return line
+    for cand in (t, _RX_TRAIL.sub(r"\1", _RX_BAREKEY.sub(r'\1"\2":', t))):
+        try:
+            obj = ast.literal_eval(cand)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            continue
+        if isinstance(obj, dict) and all(isinstance(k, str) for k in obj):
+            return obj
+    return line
+
+
+def _mrn_values(obj, depth=0):
+    """Hospital identifiers stored INSIDE a record (two levels deep)."""
+    out = []
+    if isinstance(obj, dict) and depth <= 2:
+        for k, v in obj.items():
+            if isinstance(v, (str, int)) and kind_of_key(k) == "MRN":
+                out.append(v)
+            elif isinstance(v, dict):
+                out += _mrn_values(v, depth + 1)
+    return out
 
 
 def _pointer(path):
@@ -737,7 +776,7 @@ def pass1(job: FileJob, H: Harvest):
                 try:
                     obj = json.loads(line)
                 except ValueError:
-                    obj = line
+                    obj = _lenient_obj(line)
                 job.data.append(obj)
                 r = Rec(job.rel, f"row:{i}")
                 if isinstance(obj, (dict, list)):
@@ -970,6 +1009,24 @@ class Rewriter:
         seen.add(nk)
         return nk
 
+    def key_has_pii(self, k: str, value=None) -> bool:
+        """True only when a record key matches harvested patient evidence (not merely an ID-like shape).
+        A key whose record carries its OWN, different patient identifier is that record's surrogate
+        (visit / encounter code): it is PII only if it also matches a name, phone or national ID."""
+        sw = self.sw
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", k).replace("_", " ")
+        norm_k = re.sub(r"[^A-Za-z0-9]", "", k).upper()
+        own_ids = {re.sub(r"[^A-Za-z0-9]", "", str(x)).upper() for x in _mrn_values(value)} if value is not None else set()
+        surrogate = bool(own_ids) and norm_k not in own_ids
+        if not surrogate and (norm_k in self.H.ids or sw.rx_ids.search(k) or sw.rx_digits.search(k)):
+            return True
+        if sw.rx_lat_full.search(spaced) or sw.rx_dev_full.search(k):
+            return True
+        if RX_EMAIL.search(k) or any(classify_digits(m.group(1)) for m in RX_DIGITRUN.finditer(k)):
+            return True
+        return bool(re.search(r"[A-Za-z]{3,}", k) and not re.search(r"\d", k)
+                    and (sw.rx_lat_tok.search(spaced) or sw.rx_dev_tok.search(k)) and " " in spaced.strip())
+
     def schema_key(self, k: str) -> bool:
         """Identifier-style schema keys ("data", "patientInfo", "opd_sessions") are not person names,
         even when a patient happens to be called "Data": skip single-token name matching for them, but
@@ -1048,7 +1105,10 @@ def rewrite_json(rw, node, path, job, meta_ctx, ctx_for, kind=None, out_path=(),
                 numbers = sorted(int(m[2]) for m in matches)
                 ordinals = numbers[0] in (0, 1) and numbers == list(range(numbers[0], numbers[0] + len(numbers)))
         for k, v in node.items():
-            if path in job.keyed and not (ordinals and re.sub(r"[^A-Za-z0-9]", "", k).upper() not in rw.H.ids):
+            # A record key is renamed only if it actually carries patient PII (a harvested identifier,
+            # name, phone, ...). Opaque visit / encounter codes are kept so locators stay exact.
+            key_pii = rw.key_has_pii(k, v) if path in job.keyed else False
+            if path in job.keyed and key_pii and not (ordinals and re.sub(r"[^A-Za-z0-9]", "", k).upper() not in rw.H.ids):
                 nk = "key_" + opaque("record key", k, 12)
                 while nk in seen:
                     nk += "_"
