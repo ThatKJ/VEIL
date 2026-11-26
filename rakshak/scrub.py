@@ -35,8 +35,9 @@ class Masker:
 class Ctx:
     """Per-record scrubbing context."""
 
-    def __init__(self, H, psn: str | None, days: int, order: str, band, stats):
+    def __init__(self, H, psn: str | None, days: int, order: str, band, stats, rule=None):
         self.H, self.psn, self.days, self.order, self.band, self.stats = H, psn, days, order, band, stats
+        self.rule = rule
 
     @property
     def patient_token(self) -> str:
@@ -86,6 +87,8 @@ RX_VILL = re.compile(rf"(?i)\b(?:Vill(?:age)?\.?|Gram|Gaon)\s*[:\-.]?\s*([A-Z][\
 RX_PIN_CTX = re.compile(r"(?i)(?:\bPIN(?:\s*code)?|\bPincode|पिन(?:\s*कोड)?)\s*[:\-]?\s*([1-8]\d{2})\s?(\d{3})\b|(?<=[\s,\-])([1-8]\d{2})\s?(\d{3})(?=\s*$|\s*\n)")
 RX_AGE = re.compile(rf"(?i)((?:\bAge(?:/Sex)?|\bAge\s*/\s*Gender|आयु|उम्र|\bUmar|\bUmra)\s*[:\-]?\s*)(\d{{1,3}})(\s*(?:Yrs?\.?|Years?|Y|वर्ष|saal|sal)?)"
                     rf"|(?<![\w.x×])(\d{{1,3}})(\s*(?:Yrs?|Y|years)\s*/\s*[MFmf]\b)")
+RX_URL = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+|\burn:(?:uuid|oid):[\w.\-]+")
+RX_AGE_FREE = re.compile(r"(?i)(?<![\w.\-/×])(\d{1,3})(\s*(?:-\s*)?(?:yrs?|years?|yo|y/o|वर्ष|saal|sal)\b\.?(?:\s*old)?)(?=\s*[,/;)]?\s*(?:male|female|man|woman|boy|girl|m\b|f\b|पुरुष|महिला|$|,|\)|;))")
 RX_KIN = re.compile(rf"(?i)\b({L.KIN})\.?\s*[:\-]?\s*(?:\(\s*)?({NAME_SEQ})")
 RX_LABEL = re.compile(L.NAME_LABEL.pattern + rf"({NAME_SEQ})")
 RX_HON_AFTER = re.compile(rf"({NAME_SEQ})(\s+{L.HONORIFIC_AFTER})\b")
@@ -121,7 +124,7 @@ RX_NAME_ROLE = re.compile(rf"({NAME_SEQ})\s*\((?:attendant|relative|visitor|call
                           rf"gawah|beta|beti|bhai|behen|bahan|pati|patni|maa|pita|chacha|chachi|mama|mami|bua|nana|nani|dada|dadi)\b", re.I)
 
 
-def generalize_address(value: str, band_pin: bool = True) -> str:
+def generalize_address(value: str, band_pin: bool = False) -> str:
     """Keep only district-level information (and a 3-digit PIN prefix)."""
     parts = [p.strip() for p in re.split(r"[,;]| - |\n", value) if p.strip()]
     kept = []
@@ -176,7 +179,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         return m.group(0)[: m.start(1) - m.start(0)] + put(generalize_address(m.group(1)))
     t = RX_ADDR_LINE.sub(addr, t)
 
-    # 2. protect doctor names and clinical expressions
+    # 2. protect URLs / XML namespaces, doctor names and clinical expressions
+    t = RX_URL.sub(lambda m: put(m.group(0)), t)
     t = RX_DOCTOR.sub(lambda m: put(m.group(0)), t)
 
     # 3. dates -> per-patient shift (masked so later digit rules never touch them)
@@ -307,7 +311,8 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
     def pin(m):
         st["identifiers"] += 1
         g = 1 if m.group(1) else 3
-        return m.group(0)[: m.start(g) - m.start(0)] + put(m.group(g) + "XXX")
+        keep = ctx.rule is None or ctx.rule.pin != "drop"
+        return m.group(0)[: m.start(g) - m.start(0)] + put(m.group(g) + "XXX" if keep else "[PIN]")
     t = RX_PIN_CTX.sub(pin, t)
     t = RX_WARD_ADDR.sub(red("[LOCALITY]"), t)
 
@@ -319,6 +324,17 @@ def scrub_text(text: str, ctx: Ctx, sw: Sweeper, allow_b64: bool = True) -> str:
         a = int(m.group(4))
         return put(ctx.band(a)) + m.group(5)
     t = RX_AGE.sub(age, t)
+
+    def age_free(m):
+        a = int(m.group(1))
+        if a > 120:
+            return m.group(0)
+        pre = t_view[max(0, m.start() - 12):m.start()].lower()
+        if re.search(r"(?:\bx|since|for|from|past|last|back|ago|×)\s*$", pre):
+            return m.group(0)
+        return put(ctx.band(a)) + m.group(2)
+    t_view = t
+    t = RX_AGE_FREE.sub(age_free, t)
 
     return M.restore(t)
 

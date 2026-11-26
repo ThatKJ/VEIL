@@ -196,8 +196,15 @@ def add_ev(rec: Rec, H: Harvest, kind: str, v, district: dict | None = None):
                     H.add_place(pp)
 
 
+RX_ICD = re.compile(r"\b([A-TV-Z]\d{2}(?:\.\d{1,2})?)\b")
+COND_TOK = {"diagnosis", "diagnoses", "condition", "conditions", "procedure", "procedures", "impression", "icd",
+            "disease", "illness", "surgery", "operation", "rog", "बीमारी", "निदान"}
+
+
 def text_evidence(text: str, rec: Rec, H: Harvest, order: str):
     e = rec.ev
+    for m in RX_ICD.finditer(text):
+        e.setdefault("conds", set()).add(m.group(1))
     first_label = None
     for m in RX_LABEL.finditer(text):
         toks = clean_name_seq(m.group(m.lastindex))
@@ -365,11 +372,15 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
         ext_kind = ext_value_kind(obj)
         for k, v in obj.items():
             ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
-            if k == "gender" or set(L.key_tokens(k)) & GENDER_TOK:
+            if (k == "gender" or set(L.key_tokens(k)) & GENDER_TOK) and ck != "AGE":
                 g = gender_of(v) if isinstance(v, str) else None
                 if g:
                     rec.ev["gender"] = g
                 continue
+            if ck == "AGE" and isinstance(v, str):
+                gm = re.search(r"(?i)/\s*([MF])\b", v)
+                if gm:
+                    rec.ev["gender"] = gm.group(1).upper()
             if set(L.key_tokens(k)) & DISTRICT_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
                 rec.ev.setdefault("district", v)
@@ -377,6 +388,8 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
             if set(L.key_tokens(k)) & TEHSIL_TOK and isinstance(v, str):
                 H.safe_places.add(norm(v))
                 continue
+            if set(L.key_tokens(k)) & COND_TOK and isinstance(v, str):
+                rec.ev.setdefault("conds", set()).add(norm(v))
             walk_evidence(v, ck, rec, H, order, rk)
     elif isinstance(obj, list):
         for x in obj:
@@ -387,6 +400,9 @@ def walk_evidence(obj, kind, rec: Rec, H: Harvest, order: str, res_kind=None):
         if kind in (None, "SAFE"):
             if isinstance(obj, str) and len(obj) > 3:
                 text_evidence(obj, rec, H, order)
+            return
+        if kind == "COND" and isinstance(obj, str):
+            rec.ev.setdefault("conds", set()).add(norm(obj))
             return
         if kind == "NAME" and not isinstance(obj, str):
             return
@@ -458,7 +474,7 @@ def pass1(job: FileJob, H: Harvest):
             for ci, h in enumerate(header):
                 k = kind_of_key(h)
                 toks = set(L.key_tokens(h))
-                if toks & GENDER_TOK:
+                if toks & GENDER_TOK and k != "AGE":
                     k = "GENDER"
                 elif toks & DISTRICT_TOK:
                     k = "DISTRICT"
@@ -484,6 +500,8 @@ def pass1(job: FileJob, H: Harvest):
                     elif k == "NAME_SHAPE":
                         H.add_name(v)
                     elif k in (None, "SAFE"):
+                        if set(L.key_tokens(header[ci])) & COND_TOK and v.strip():
+                            r.ev.setdefault("conds", set()).add(norm(v))
                         if len(v) > 3:
                             text_evidence(v, r, H, job.order)
                     elif k not in ("DOCTOR", "DATE", "RELATION", "STRUCT"):
@@ -522,9 +540,15 @@ class Rewriter:
                 return 0
             if kind == "PIN":
                 st["identifiers"] += 1
+                if ctx.rule is not None and ctx.rule.pin == "keep6":
+                    return v
                 s = str(int(v))
+                if ctx.rule is not None and ctx.rule.pin == "drop":
+                    return 0
                 return int(s[:3] + "000") if len(s) == 6 else 0
             if kind == "AGE" and isinstance(v, int):
+                if ctx.rule is not None and ctx.rule.band <= 1:
+                    return v
                 st["generalized"] += 1
                 return ctx.band(v)
             return v
@@ -552,6 +576,9 @@ class Rewriter:
             return f"[{kind}]"
         if kind == "DOB":
             st["identifiers"] += 1
+            if ctx.rule is not None and ctx.rule.dob == "year_drop":
+                st["generalized"] += 1
+                return "[DOB]"
             out = shift_dates_in(s, ctx.days, ctx.order)
             return out if out != s else "[DOB]"
         if kind == "DATE":
@@ -564,7 +591,12 @@ class Rewriter:
             return s
         if kind == "PIN":
             st["identifiers"] += 1
+            rule = ctx.rule
+            if rule is not None and rule.pin == "keep6":
+                return s
             m = re.search(r"([1-8]\d{2})\s?\d{3}", s)
+            if rule is not None and rule.pin == "drop":
+                return "[PIN]"
             return (m.group(1) + "XXX") if m else "[PIN]"
         if kind == "VILLAGE":
             st["identifiers"] += 1
@@ -574,6 +606,9 @@ class Rewriter:
         if kind == "ADDRESS":
             st["identifiers"] += 1
             return generalize_address(s)
+        if kind == "TEHSIL" and (ctx.rule is None or ctx.rule.tehsil == "drop"):
+            st["generalized"] += 1
+            return (rec.ev.get("district") if rec else None) or "[TEHSIL]"
         if kind in ("DISTRICT", "TEHSIL", "GENDER"):
             return scrub_text(s, ctx, self.sw) if re.search(r"\d{3}|[A-Z][a-z]+\s+[A-Z][a-z]+", s) else s
         if kind == "NAME_SHAPE":
@@ -612,7 +647,7 @@ class Rewriter:
             for k, v in obj.items():
                 ck = ext_kind if (ext_kind and k.startswith("value")) else child_kind(k, base)
                 toks = set(L.key_tokens(k))
-                if toks & GENDER_TOK and not isinstance(v, (dict, list)):
+                if toks & GENDER_TOK and not isinstance(v, (dict, list)) and ck != "AGE":
                     ck = "GENDER"
                 elif toks & DISTRICT_TOK and isinstance(v, str):
                     ck = "DISTRICT"
@@ -734,6 +769,9 @@ def load_policy(path: Path) -> dict:
             if ":" in line:
                 k, v = (x.strip() for x in line.split(":", 1))
                 pol[k] = int(v) if v.lstrip("-").isdigit() else v
+    for k, v in os.environ.items():            # experiment overrides: RAKSHAK_P_<key>=<value>
+        if k.startswith("RAKSHAK_P_"):
+            pol[k[10:].lower()] = int(v) if v.lstrip("-").isdigit() else v
     return pol
 
 
@@ -801,8 +839,8 @@ def run(inp: Path, out: Path, policy: dict) -> int:
         if rec is not None and rec.pid:
             days = P.days_for(rec.key, maxd)
             band = plan.band_fn(rec.key)
-            return Ctx(H, rec.pid, days, job.order, band, st)
-        return Ctx(H, None, 0, job.order, plan.band_fn(None), st)
+            return Ctx(H, rec.pid, days, job.order, band, st, plan.rule(rec.key))
+        return Ctx(H, None, 0, job.order, plan.band_fn(None), st, plan.default)
 
     # ---- output names
     san = out / "sanitized"
